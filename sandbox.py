@@ -199,8 +199,13 @@ def main() -> int:
         scene(6, "The origin corrects itself")
         A, Ar = use_store(ORG_A)
         holder_sess = "a-colleague-in-org-a"
+        _origin_sess = A._record.__globals__["_session"]
         A._record.__globals__["_session"] = lambda: holder_sess   # they read it earlier
         A.block_read(a_block)
+        # the ORIGIN publishes the correction, not the holder. Leaving the patch in
+        # place records the supersede as the holder's own write, and the hook then
+        # correctly stays silent -- you are never told your own new version is stale.
+        A._record.__globals__["_session"] = _origin_sess
         sup = A.block_supersede(
             a_block,
             "Correction: 5.4% is the acknowledgement rate, not the citation rate. "
