@@ -118,6 +118,14 @@ operator, which lives in `agent-verify/portal/portal.py`, not in this server; th
 server implements the discount half. Naive scalar multiplication gives `0.73` and
 manufactures 17% disbelief nobody asserted, so the check has teeth.
 
+## The write-side nudge (why you might be reading this unprompted)
+
+If a claim-shaped line (PROVEN / VERIFIED / a percentage / a stated confidence) leaves as
+plain text into a chronicle, board or memory file with no `blk_` reference, the plugin says
+so — once per file, three per session, never in source code. A copy cannot be corrected
+once it leaves; the nudge exists because an entire evening of building this system produced
+dozens of load-bearing claims and zero blocks. Adoption is a write-side problem.
+
 ## Honest limits
 
 A hash mismatch does not distinguish transit corruption from tampering — and shouldn't;
