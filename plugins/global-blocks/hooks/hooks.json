@@ -1,0 +1,64 @@
+{
+  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read transcludes a referenced block with its provenance and enrols you. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired — running there would look like coverage and do nothing.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/transclude.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_global-blocks_blocks__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/record-read.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/check-stale.py\" --on-change-only"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/check-stale.py\" --on-change-only"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/check-stale.py\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "resume|fork|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/check-stale.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

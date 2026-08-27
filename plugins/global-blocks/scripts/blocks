@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""blocks — look at your store. Terminal first, browser when you want to send it.
+
+    blocks              what is in the store, newest first
+    blocks tree         the actual files on disk, because that IS the format
+    blocks cat <id>     one block: provenance header, then the markdown
+    blocks log <id>     every version, and what changed between them
+    blocks html [out]   one self-contained HTML file — no server, no install
+    blocks board [out]  the store as an audience board — who holds what, who is owed
+    blocks board --serve [port]   the same board, live — re-renders on every poll
+
+Deliberately not an app. The store is plain markdown you already own; anything that
+needs installing to read it would be arguing with the point of the store. This is a
+reader, not a database — it writes nothing.
+
+Honours GLOBAL_BLOCKS_HOME, so you can point it at a sandbox.
+"""
+from __future__ import annotations
+
+import html as _html
+import json
+import os
+import sys
+from pathlib import Path
+
+HOME = Path(os.environ.get("GLOBAL_BLOCKS_HOME", Path.home() / ".global-blocks"))
+BLOCKS = HOME / "blocks"
+
+B, D, G, Y, C, M, OFF = ("\033[1m", "\033[2m", "\033[32m", "\033[33m",
+                         "\033[36m", "\033[35m", "\033[0m")
+if not sys.stdout.isatty():
+    B = D = G = Y = C = M = OFF = ""
+
+
+def every_block():
+    """Every block, wherever it has been filed. The id lives in meta.json, not the path."""
+    if not BLOCKS.is_dir():
+        return []
+    out = []
+    for meta_path in sorted(BLOCKS.rglob("meta.json")):
+        try:
+            meta = json.loads(meta_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            out.append({"id": f"<unreadable: {meta_path.parent.name}>", "n": 0,
+                        "title": f"{type(e).__name__}", "origin": "?",
+                        "confidence": None, "dir": meta_path.parent, "broken": True})
+            continue
+        meta["dir"] = meta_path.parent
+        meta["broken"] = False
+        out.append(meta)
+    return sorted(out, key=lambda m: m.get("authored_at", ""), reverse=True)
+
+
+def versions(d: Path):
+    return sorted((d / "versions").glob("*.md")) if (d / "versions").is_dir() else []
+
+
+def find(block_id: str):
+    for m in every_block():
+        if m.get("id") == block_id or m.get("id", "").endswith(block_id):
+            return m
+    return None
+
+
+def cmd_list():
+    bs = every_block()
+    if not bs:
+        print(f"{D}no blocks in {HOME}{OFF}")
+        return 0
+    print(f"{B}{len(bs)} block(s) in {HOME}{OFF}\n")
+    for m in bs:
+        if m["broken"]:
+            print(f"  {Y}⚠ {m['id']}{OFF}  {m['title']}")
+            continue
+        conf = "—" if m.get("confidence") is None else f"{m['confidence']}"
+        moved = "" if m["dir"] == BLOCKS / m["id"] else f"  {M}moved{OFF}"
+        print(f"  {C}{m['id']}{OFF}  {B}v{m.get('n', 1)}{OFF}  {m.get('title', '')[:44]}")
+        print(f"    {D}{m.get('origin', '?')} · asserts {conf} · "
+              f"{len(versions(m['dir']))} version(s){OFF}{moved}")
+    print(f"\n{D}blocks cat <id>   to read one{OFF}")
+    return 0
+
+
+def cmd_tree():
+    if not BLOCKS.is_dir():
+        print(f"{D}no store at {HOME}{OFF}")
+        return 0
+    print(f"{B}{HOME}{OFF}")
+    print(f"{D}plain files. no database, no server — this IS the format.{OFF}\n")
+    for p in sorted(HOME.rglob("*")):
+        if any(part.startswith(".") for part in p.relative_to(HOME).parts):
+            continue
+        depth = len(p.relative_to(HOME).parts) - 1
+        tick = f"{D}·{OFF}" if p.is_dir() else " "
+        size = "" if p.is_dir() else f"  {D}{p.stat().st_size}b{OFF}"
+        name = f"{C}{p.name}{OFF}" if p.is_dir() else p.name
+        print(f"  {'  ' * depth}{tick} {name}{size}")
+    return 0
+
+
+def cmd_cat(block_id: str):
+    m = find(block_id)
+    if not m:
+        print(f"{Y}no block matching {block_id!r} in {HOME}{OFF}")
+        return 1
+    vs = versions(m["dir"])
+    if not vs:
+        print(f"{Y}{m['id']} has metadata but no versions on disk — broken, not empty{OFF}")
+        return 1
+    print(f"{B}{m.get('title', '')}{OFF}")
+    print(f"{D}{m['id']} · v{m.get('n', 1)} · asserted by {m.get('origin', '?')} "
+          f"with confidence {m.get('confidence', '—')}{OFF}")
+    print(f"{D}{m['dir']}{OFF}")
+    print(f"{D}{'─' * 68}{OFF}")
+    print(vs[-1].read_text(errors="replace").rstrip())
+    print(f"{D}{'─' * 68}{OFF}")
+    print(f"{D}this is what the origin asserts — not what you should believe.{OFF}")
+    return 0
+
+
+def cmd_log(block_id: str):
+    import difflib
+    m = find(block_id)
+    if not m:
+        print(f"{Y}no block matching {block_id!r}{OFF}")
+        return 1
+    vs = versions(m["dir"])
+    print(f"{B}{m.get('title', '')}{OFF}  {D}{len(vs)} version(s){OFF}\n")
+    prev = None
+    for v in vs:
+        body = v.read_text(errors="replace")
+        print(f"  {C}{v.stem}{OFF}")
+        if prev is None:
+            for line in body.splitlines():
+                print(f"      {line[:96]}")
+        else:
+            for ln in difflib.unified_diff(prev.splitlines(), body.splitlines(),
+                                           lineterm="", n=0):
+                if ln.startswith("+") and not ln.startswith("+++"):
+                    print(f"      {G}+ {ln[1:].strip()[:94]}{OFF}")
+                elif ln.startswith("-") and not ln.startswith("---"):
+                    print(f"      {Y}- {ln[1:].strip()[:94]}{OFF}")
+        prev = body
+        print()
+    return 0
+
+
+def cmd_html(out: str | None):
+    dest = Path(out or "blocks.html")
+    bs = every_block()
+    rows = []
+    for m in bs:
+        vs = versions(m["dir"])
+        body = vs[-1].read_text(errors="replace") if vs else "(no versions on disk)"
+        hist = "".join(
+            f'<li><code>{_html.escape(v.stem)}</code><pre>{_html.escape(v.read_text(errors="replace"))}</pre></li>'
+            for v in vs[:-1])
+        rows.append(f"""
+<article>
+  <h2>{_html.escape(str(m.get('title', '')))}</h2>
+  <p class="meta"><code>{_html.escape(str(m.get('id', '')))}</code>
+     &middot; v{m.get('n', 1)}
+     &middot; asserted by <b>{_html.escape(str(m.get('origin', '?')))}</b>
+     &middot; confidence {m.get('confidence', '—')}</p>
+  <pre class="body">{_html.escape(body)}</pre>
+  <p class="path">{_html.escape(str(m['dir']))}</p>
+  {f'<details><summary>{len(vs) - 1} earlier version(s)</summary><ul>{hist}</ul></details>' if hist else ''}
+</article>""")
+
+    dest.write_text(f"""<!doctype html><meta charset="utf-8">
+<title>global-blocks &mdash; {_html.escape(str(HOME))}</title>
+<style>
+ :root {{ color-scheme: light dark; }}
+ body {{ font: 15px/1.55 ui-sans-serif,-apple-system,Segoe UI,sans-serif;
+        max-width: 46rem; margin: 3rem auto; padding: 0 1.2rem; }}
+ h1 {{ font-size: 1.3rem; margin-bottom: .2rem; }}
+ .lede {{ opacity: .65; margin-top: 0; }}
+ article {{ border-top: 1px solid color-mix(in oklab, currentColor 18%, transparent);
+            padding: 1.4rem 0; }}
+ h2 {{ font-size: 1.05rem; margin: 0 0 .3rem; }}
+ .meta, .path {{ font-size: .8rem; opacity: .6; margin: .2rem 0; }}
+ .path {{ font-family: ui-monospace, monospace; }}
+ pre {{ white-space: pre-wrap; word-break: break-word; margin: .6rem 0;
+        font: .85rem/1.5 ui-monospace, monospace; }}
+ pre.body {{ padding: .8rem 1rem; border-radius: 8px;
+             background: color-mix(in oklab, currentColor 6%, transparent); }}
+ details {{ font-size: .85rem; opacity: .8; }}
+ code {{ font-family: ui-monospace, monospace; }}
+</style>
+<h1>global-blocks</h1>
+<p class="lede">{len(bs)} block(s) in <code>{_html.escape(str(HOME))}</code>.
+ Each is what its origin asserts &mdash; not what you should believe.</p>
+{"".join(rows) or "<p>Nothing stored yet.</p>"}
+<p class="path" style="margin-top:2rem">Generated by <code>blocks html</code>.
+ One file, no server. Everything above is plain markdown on your disk.</p>
+""", encoding="utf-8")
+    print(f"{G}wrote {dest}{OFF}  {D}({len(bs)} block(s)){OFF}")
+    print(f"{D}open it with:  open {dest}{OFF}")
+    return 0
+
+
+def _audience():
+    """Everyone the store knows is holding something, last entry per (who, block) wins.
+
+    Two populations, kept apart on the board the way the code keeps them apart:
+    read-log sessions (enrolled by reading — the push audience) and declared
+    portal holders (owed, but unreachable until a transport exists).
+    """
+    readers, holders, unreadable = {}, {}, 0
+    rl = HOME / "readlog"
+    if rl.is_dir():
+        for f in sorted(rl.glob("*.jsonl")):
+            for line in f.read_text(errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    unreadable += 1
+                    continue
+                readers[(f.stem, str(e.get("blk", "")))] = e.get("v")
+    hf = HOME / "holders.jsonl"
+    if hf.is_file():
+        for line in hf.read_text(errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                unreadable += 1
+                continue
+            holders[(str(e.get("holder", "?")), str(e.get("block_id", "")))] = e.get("version")
+    return readers, holders, unreadable
+
+
+def _board_page(live: bool):
+    bs = [m for m in every_block() if not m["broken"]]
+    broken = [m for m in every_block() if m["broken"]]
+    readers, holders, unreadable = _audience()
+    known = {m["id"] for m in bs}
+    foreign = {b for (_, b) in list(readers) + list(holders) if b not in known}
+
+    def rows(block_id, n):
+        out = []
+        pops = (("read", readers, "enrolled by reading — the push reaches this one"),
+                ("portal", holders, "declared holder — owed, no transport yet"))
+        for kind, pop, why in pops:
+            for (who, b), v in sorted(pop.items()):
+                if b != block_id:
+                    continue
+                stale = isinstance(v, int) and v < n
+                cls = "stale" if stale else "current"
+                state = (f"saw v{v} · now v{n} — owed this correction" if stale
+                         else f"current at v{v}")
+                out.append(f'<div class="row {cls}" title="{_html.escape(why)}">'
+                           f'<span class="who">{_html.escape(who[:24])}</span>'
+                           f'<span class="kind">{kind}</span>'
+                           f'<span class="state">{_html.escape(state)}</span></div>')
+        return "".join(out) or '<div class="row none">nobody is holding this</div>'
+
+    import difflib
+    cards = []
+    for m in bs:
+        vs = versions(m["dir"])
+        body = vs[-1].read_text(errors="replace").strip() if vs else "(no versions on disk)"
+        n = m.get("n", 1)
+        chain = " ".join(
+            f'<span class="v{" latest" if i == len(vs) else ""}">v{i}</span>'
+            for i in range(1, len(vs) + 1)) or '<span class="v">v?</span>'
+        diff = ""
+        if len(vs) >= 2:
+            a, b = vs[-2].read_text(errors="replace"), vs[-1].read_text(errors="replace")
+            lines = []
+            for ln in difflib.unified_diff(a.splitlines(), b.splitlines(), lineterm="", n=0):
+                if ln.startswith("+") and not ln.startswith("+++"):
+                    lines.append(f'<div class="add">+ {_html.escape(ln[1:].strip()[:110])}</div>')
+                elif ln.startswith("-") and not ln.startswith("---"):
+                    lines.append(f'<div class="del">− {_html.escape(ln[1:].strip()[:110])}</div>')
+            if lines:
+                diff = f'<div class="diff"><div class="difflabel">what changed, v{len(vs)-1} → v{len(vs)}</div>{"".join(lines)}</div>'
+        conf = m.get("confidence")
+        cards.append(f"""
+<section class="card{' superseded' if len(vs) > 1 else ''}">
+  <div class="cardhead">
+    <h2>{_html.escape(str(m.get('title', '')) or '(untitled)')}</h2>
+    <div class="chain">{chain}</div>
+  </div>
+  <div class="meta"><code>{_html.escape(str(m.get('id', '')))}</code></div>
+  <div class="meta">asserted by <b>{_html.escape(str(m.get('origin', '?')))}</b>
+    · confidence {conf if conf is not None else '—'}
+    · <span class="hash">{_html.escape(str(m.get('hash', ''))[:12])}…</span></div>
+  <pre class="body">{_html.escape(body[:700])}{'…' if len(body) > 700 else ''}</pre>
+  {diff}
+  <div class="audience">{rows(m['id'], n)}</div>
+</section>""")
+
+    notes = []
+    if foreign:
+        notes.append(f"{len(foreign)} reference(s) to blocks that live in other stores — foreign, not broken")
+    if broken:
+        notes.append(f"{len(broken)} block(s) this store logged and cannot read — broken, named above")
+    if unreadable:
+        notes.append(f"{unreadable} log line(s) could not be parsed — counted, not hidden")
+    poll = ("""<script>
+setInterval(async () => {
+  try {
+    const t = await (await fetch(location.href)).text();
+    const d = new DOMParser().parseFromString(t, "text/html");
+    const fresh = d.getElementById("board");
+    if (fresh) document.getElementById("board").replaceWith(fresh);
+  } catch (e) {}
+}, 1500);
+</script>""" if live else "")
+
+    stamp = __import__("datetime").datetime.now().strftime("%H:%M:%S")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Global Blocks — the store, live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&display=swap" rel="stylesheet">
+<style>
+ :root {{ --bg:#0b0d10; --surface:#12161b; --line:#232a33; --fg:#e7ecf2; --muted:#8b97a6;
+         --faint:#5d6875; --green:#5fd39b; --amber:#e8b567; --red:#e8736c; --accent:#7bb8ff;
+         --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace; }}
+ * {{ box-sizing:border-box; margin:0 }}
+ body {{ background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif;
+        padding:40px 26px 90px; max-width:1080px; margin:0 auto }}
+ header h1 {{ font-family:'Fraunces',Georgia,serif; font-weight:600; font-size:1.7rem }}
+ header .sub {{ color:var(--muted); margin-top:4px; font-size:.92rem }}
+ header .sub code {{ font-family:var(--mono); font-size:.85rem }}
+ #board {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(460px,1fr)); gap:18px; margin-top:26px }}
+ @media (max-width:560px) {{ #board {{ grid-template-columns:1fr }} }}
+ .card {{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px 20px }}
+ .cardhead {{ display:flex; justify-content:space-between; align-items:baseline; gap:12px }}
+ h2 {{ font-family:'Fraunces',Georgia,serif; font-weight:600; font-size:1.08rem }}
+ .chain {{ font-family:var(--mono); font-size:.78rem; color:var(--faint); white-space:nowrap }}
+ .chain .v {{ padding:1px 6px; border:1px solid var(--line); border-radius:6px; margin-left:4px }}
+ .chain .v.latest {{ color:var(--accent); border-color:var(--accent) }}
+ .meta {{ font-size:.8rem; color:var(--muted); margin-top:5px }}
+ .meta code, .hash {{ font-family:var(--mono); font-size:.76rem }}
+ pre.body {{ font:.83rem/1.5 var(--mono); white-space:pre-wrap; word-break:break-word;
+             background:rgba(255,255,255,.03); border-radius:8px; padding:10px 12px; margin-top:10px;
+             max-height:180px; overflow:auto }}
+ .diff {{ margin-top:10px; font:.8rem/1.5 var(--mono); border-left:2px solid var(--amber); padding-left:10px }}
+ .difflabel {{ color:var(--amber); font-size:.72rem; letter-spacing:.6px; text-transform:uppercase; margin-bottom:3px }}
+ .diff .add {{ color:var(--green) }} .diff .del {{ color:var(--red); opacity:.85 }}
+ .audience {{ margin-top:12px; border-top:1px solid var(--line); padding-top:10px }}
+ .row {{ display:flex; gap:10px; align-items:baseline; font-size:.82rem; padding:2px 0 }}
+ .row .who {{ font-family:var(--mono); font-size:.78rem; min-width:11em; color:var(--fg) }}
+ .row .kind {{ font-size:.68rem; letter-spacing:.8px; text-transform:uppercase; color:var(--faint);
+               border:1px solid var(--line); border-radius:5px; padding:0 5px }}
+ .row.current .state {{ color:var(--green) }}
+ .row.stale .state {{ color:var(--amber); animation:pulse 1.6s ease-in-out infinite }}
+ .row.none {{ color:var(--faint); font-style:italic }}
+ @keyframes pulse {{ 50% {{ opacity:.45 }} }}
+ footer {{ margin-top:34px; color:var(--faint); font-size:.8rem; line-height:1.7 }}
+</style></head><body>
+<header>
+  <h1>Global Blocks</h1>
+  <div class="sub">{len(bs)} block(s) in <code>{_html.escape(str(HOME))}</code>
+   · {"live — re-rendered " + stamp if live else "static snapshot — run <code>blocks board --serve</code> for live"}
+   · what each origin asserts, not what you should believe</div>
+</header>
+<div id="board">{"".join(cards) or '<p style="color:var(--faint)">Nothing stored yet.</p>'}</div>
+<footer>{"<br>".join(_html.escape(x) for x in notes)}{"<br>" if notes else ""}plain files · no database · the audience above is computed from the read-log and holders file, not a subscription registry</footer>
+{poll}
+</body></html>"""
+
+
+def cmd_board(out: str | None, serve: bool, port: int):
+    if serve:
+        import http.server
+
+        class Board(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                page = _board_page(live=True).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(page)
+
+            def log_message(self, *_):
+                pass
+
+        addr = ("127.0.0.1", port)
+        with http.server.ThreadingHTTPServer(addr, Board) as srv:
+            print(f"{G}board live at{OFF}  {B}http://{addr[0]}:{addr[1]}/{OFF}")
+            print(f"{D}re-reads the store on every poll (~1.5s) — ctrl-c to stop{OFF}")
+            try:
+                srv.serve_forever()
+            except KeyboardInterrupt:
+                print(f"\n{D}board stopped{OFF}")
+        return 0
+    dest = Path(out or "board.html")
+    dest.write_text(_board_page(live=False), encoding="utf-8")
+    print(f"{G}wrote {dest}{OFF}")
+    print(f"{D}open it with:  open {dest}   (or --serve for the live version){OFF}")
+    return 0
+
+
+def main(argv):
+    cmd = argv[0] if argv else "list"
+    if cmd in ("list", "ls"):
+        return cmd_list()
+    if cmd == "tree":
+        return cmd_tree()
+    if cmd == "cat":
+        return cmd_cat(argv[1]) if len(argv) > 1 else (print(__doc__) or 2)
+    if cmd == "log":
+        return cmd_log(argv[1]) if len(argv) > 1 else (print(__doc__) or 2)
+    if cmd == "html":
+        return cmd_html(argv[1] if len(argv) > 1 else None)
+    if cmd == "board":
+        rest = argv[1:]
+        serve = "--serve" in rest
+        rest = [a for a in rest if a != "--serve"]
+        port = next((int(a) for a in rest if a.isdigit()), 7333)
+        out = next((a for a in rest if not a.isdigit()), None)
+        return cmd_board(out, serve, port)
+    print(__doc__)
+    return 0 if cmd in ("-h", "--help", "help") else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

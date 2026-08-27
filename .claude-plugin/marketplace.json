@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "playful-sincerity",
+  "description": "Infrastructure for claims that have to survive crossing a boundary \u2014 from Playful Sincerity.",
+  "owner": {
+    "name": "Playful Sincerity",
+    "email": "wisdomhappy@playfulsincerity.org"
+  },
+  "plugins": [
+    {
+      "name": "global-blocks",
+      "description": "Addressable, versioned, hash-chained blocks that cross organizational boundaries as portals rather than copies \u2014 with trust-discounted belief, and corrections that push to everyone who held the superseded version.",
+      "author": {
+        "name": "Playful Sincerity"
+      },
+      "category": "productivity",
+      "source": "./plugins/global-blocks",
+      "license": "Apache-2.0"
+    }
+  ]
+}
