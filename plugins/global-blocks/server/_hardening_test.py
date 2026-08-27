@@ -194,7 +194,8 @@ def main() -> int:
     check("the portal count is still its own number", r["owed_to"] == 0, str(r["owed_to"]))
     check("the reader who only READ is counted", r["reached_locally_count"] == 1,
           str(r.get("reached_locally")))
-    check("the audience is the sum, not one half", r["audience"] == 1, str(r["audience"]))
+    check("the floor is the sum of both registries", r["audience_at_least"] == 1,
+          str(r["audience_at_least"]))
     check("and the note cannot be read as 'nobody'",
           "No portal holder and no local reader" not in r["note"], r["note"][:140])
 
@@ -202,7 +203,10 @@ def main() -> int:
     os.environ["GLOBAL_BLOCKS_SESSION"] = "nobody-reads-this-one"
     lonely = B.block_write("Unread and unshared.", confidence=0.5, title="Lonely case")
     r2 = B.block_supersede(lonely["block_id"], "Still unread.")
-    check("with a genuinely empty audience it says so", r2["audience"] == 0, str(r2["audience"]))
+    check("with a genuinely empty audience the floor is 0", r2["audience_at_least"] == 0,
+          str(r2["audience_at_least"]))
+    check("...and it says the floor is not a total", "cannot be counted from here" in r2["note"],
+          r2["note"][:140])
 
     print("\n§J writing a claim enrols you in it — without needing the hooks to be loaded")
     # The hook's matcher covered block_write so the author WAS enrolled, while the server

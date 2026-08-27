@@ -216,6 +216,21 @@ def main() -> int:
     check("and the overflow count is right",
           f"+{len(many) - 8} further" in out13, out13[-160:])
 
+    # THE HALF THIS TEST MISSED. It asserted the overflow was counted on screen and
+    # never that it was enrolled — so display stayed honest while the mechanism capped
+    # silently, and the four blocks past the cap would never have reached their reader
+    # when they changed. Found on 0.7.1 by a reviewer who re-checked instead of trusting
+    # the earlier fix. The cap protects CONTEXT; a read-log line is not context.
+    rl = STORE / "readlog" / "a-reader-of-many.jsonl"
+    logged = {json.loads(l)["blk"] for l in rl.read_text().splitlines() if l.strip()} \
+        if rl.exists() else set()
+    check(f"ALL {len(many)} are enrolled, not just the {8} displayed",
+          all(b in logged for b in many),
+          f"{len(logged & set(many))}/{len(many)} enrolled — "
+          f"{[b[:12] for b in many if b not in logged]} would never be told")
+    check("and the notice says the cap is display-only",
+          "enrolled in all of them" in out13, out13[-200:])
+
     print("\n§12 correcting a claim yourself does not hide the correction from you")
     # A supersede goes through the same recorder as a read, so the session that made the
     # correction was marked as holding it and transclusion went silent — at exactly the

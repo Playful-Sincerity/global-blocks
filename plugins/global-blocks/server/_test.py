@@ -150,7 +150,7 @@ async def main() -> int:
             mine = [c for c in ch2["changes"] if c["block_id"] == bid]
             print(f"10. own correction   changed={ch2['changed']} · "
                   f"{'silent about my own edit' if not mine else 'REPORTED BACK AT ME'} "
-                  f"· audience={sup3.get('audience')}")
+                  f"· audience={sup3.get('audience_at_least')}")
             if mine:
                 print("   ✗ told me about a correction I made myself"); ok = False
             # frank@hha took a portal back at step 2 and is genuinely still stale, so the

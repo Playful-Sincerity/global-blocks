@@ -161,20 +161,32 @@ def main() -> int:
     if not seen:
         return 0
 
+    # ENROL EVERY reference; DISPLAY only the first MAX_BLOCKS.
+    #
+    # These were one loop, capped, so a file citing twelve blocks enrolled you in eight.
+    # The four beyond the cap were counted honestly on screen and silently never recorded
+    # — so you would never be told when they changed. Display honest, mechanism not: this
+    # project's own failure, inside the hook built to prevent it. Found on 0.7.1 by a
+    # reviewer who re-checked rather than assuming the earlier fix covered it.
+    #
+    # The cap exists to protect CONTEXT — the injected text — which is expensive. A
+    # read-log line is not. There was never a reason for them to share a limit.
     found, missing = [], []
     try:
-        for blk in list(seen)[:MAX_BLOCKS]:
+        for i, blk in enumerate(seen):
             path = _resolve.find(blk)
             if path is None:
-                missing.append(blk)
+                if i < MAX_BLOCKS:
+                    missing.append(blk)
                 continue
             info = describe(blk, path)
             if info is None:
-                missing.append(blk)
+                if i < MAX_BLOCKS:
+                    missing.append(blk)
                 continue
             fresh = not already_shown(session, blk, info["version"])
             record(session, blk, info["version"], via=f"read:{p.name}")
-            if fresh:
+            if fresh and i < MAX_BLOCKS:
                 found.append(info)
     except Exception as e:
         # Never report clean from a failed check — that is the bug this project exists
@@ -193,7 +205,8 @@ def main() -> int:
     extra = len(seen) - MAX_BLOCKS
     body = render(found, missing, p.name)
     if extra > 0:
-        body += f"\n   (+{extra} further reference(s) not expanded — cap is {MAX_BLOCKS} per file)"
+        body += (f"\n   (+{extra} further reference(s) not expanded — cap is {MAX_BLOCKS} "
+                 f"per file. You are enrolled in all of them; only the display is capped.)")
 
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse", "additionalContext": body}}))

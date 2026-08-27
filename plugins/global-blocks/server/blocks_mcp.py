@@ -179,16 +179,23 @@ def _session() -> str:
             or os.environ.get("CLAUDE_SESSION_ID") or "local")
 
 
-def _record(block_id: str, version: int) -> None:
+def _record(block_id: str, version: int, via: str) -> None:
     """The read-log — this session took a copy of this claim at this version.
 
     No subscription is declared anywhere. Reading IS the subscription, which is
     why `block_changes` needs no registry to answer "who should be told".
+
+    `via` says HOW you came to hold it, and it is not decoration: whether you hold a
+    claim because you wrote it or because you read it is the distinction this whole
+    project trades in. The author's own row carried no `via` at all while every read
+    row did — so the one holder whose relationship to the claim is most different was
+    the one the log could not describe. `already_shown()` in transclude.py already
+    keys off this field to tell writing from being shown.
     """
     log = HOME / "readlog" / f"{_session()}.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a") as f:
-        f.write(json.dumps({"blk": block_id, "v": version}) + "\n")
+        f.write(json.dumps({"blk": block_id, "v": version, "via": via}) + "\n")
 
 
 # ── Jøsang's operators ───────────────────────────────────────────────────────
@@ -242,7 +249,7 @@ def block_write(content: str, confidence: float = 0.8, title: str = "") -> dict:
     # `owed_to` counting one registry: fine until you meet the case where only one of them
     # runs. Found 2026-08-26 answering a reviewer's question, whose own session predated
     # the matcher fix and therefore showed the block as "held at an unknown version".
-    _record(block_id, 1)
+    _record(block_id, 1, via="block_write")
     return {"block_id": block_id, "version": 1, "hash": meta["hash"], "origin": meta["origin"],
             "ref": f"{block_id}@v1"}
 
@@ -281,7 +288,7 @@ def block_read(block_id: str) -> dict:
                 "note": "this reference resolves to nothing — broken, not empty"}
     body = versions[-1].read_text(encoding="utf-8")
     got = _hash(body)
-    _record(block_id, meta["n"])
+    _record(block_id, meta["n"], via="block_read")
     return {
         "block_id": block_id, "version": meta["n"], "content": body,
         # The canonical citable form. `block_id` and `version` as separate JSON fields
@@ -525,18 +532,33 @@ def block_supersede(block_id: str, content: str, confidence: float | None = None
     # not, so the two disagreed about whether an author is caught up. Caught by the suite
     # the moment block_write started enrolling — block_changes began reporting a session's
     # own supersede back to it.
-    _record(block_id, n)
+    _record(block_id, n, via="block_supersede")
 
     # A holder who took portals at v1 and again at v3 holds v3. Keeping the FIRST
     # record per holder — as this did — told them they held v1 and understated how
     # much had moved underneath them. Last write per holder wins.
+    # holders.jsonl is the last shared mutable file without a lock. Appends do not tear
+    # (measured: 1800/1800 lines intact across 6 processes), so the WRITE side is fine —
+    # but the READ side parsed every line bare, and a reader arriving mid-append sees a
+    # final partial line. One torn line would have raised straight out of block_supersede,
+    # losing the entire notice list for a block whose holders are all perfectly recorded.
+    #
+    # A malformed line costs one holder, never the correction. Same discipline as
+    # _resolve._index(). Flagged by a reviewer as the only unraced file left; this is the
+    # cheap half — an exclusive lock around portal-append is the other, and is not needed
+    # while appends are atomic.
     latest: dict[str, dict] = {}
+    skipped = 0          # declared out here: a store with no holders file still returns it
     if HOLDERS.exists():
-        for line in HOLDERS.read_text().splitlines():
+        for line in HOLDERS.read_text(errors="replace").splitlines():
             if not line.strip():
                 continue
-            rec = json.loads(line)
-            if rec["block_id"] != block_id or rec["hash"] == meta["hash"]:
+            try:
+                rec = json.loads(line)
+                if rec["block_id"] != block_id or rec["hash"] == meta["hash"]:
+                    continue
+            except (json.JSONDecodeError, KeyError, TypeError):
+                skipped += 1
                 continue
             latest[rec["holder"]] = rec
 
@@ -585,15 +607,31 @@ def block_supersede(block_id: str, content: str, confidence: float | None = None
             "owed_to": len(notices),
             "reached_locally": reached,
             "reached_locally_count": len(reached),
-            "audience": len(notices) + len(reached),
+            # Skipping a holder quietly is the failure this project exists to catch, so a
+            # torn line is reported rather than swallowed. Normally 0.
+            "unreadable_holder_lines": skipped,
+            # A FLOOR, not a total — and the name says so.
+            #
+            # Holder-ship spreads by quotation: an id quoted as `blk_…@vN` into another
+            # session's context makes that session a holder, and the transcript scan will
+            # tell it. Observed 2026-08-26 — a session was notified while sitting outside
+            # a reported audience of 4, holding the block only because someone else's
+            # answer had quoted it. That is a feature, and it is genuinely uncountable
+            # from here: those holders exist only inside contexts this store cannot see.
+            #
+            # So the number is sound for what it measures and must never be read as
+            # "everyone affected". Calling it `audience` invited exactly that reading.
+            "audience_at_least": len(notices) + len(reached),
             "note": (
                 f"{len(notices)} holder(s) were handed a portal and must be told by you "
                 f"({'undelivered' if notices else 'none'}); "
                 f"{len(reached)} local session(s) hold a stale copy and the hook reaches "
-                f"them without you. Total affected: {len(notices) + len(reached)}."
+                f"them without you. At least {len(notices) + len(reached)} affected — a "
+                f"floor, not a total: a quoted id makes a holder this store cannot count."
                 if (notices or reached) else
-                "No portal holder and no local reader is holding a stale copy of this "
-                "block — checked against both registries, not one."),
+                "No portal holder and no local reader in THIS store is holding a stale "
+                "copy — checked against both registries. Anyone who was quoted the id "
+                "elsewhere is still a holder and cannot be counted from here."),
             }
 
 
