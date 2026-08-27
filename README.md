@@ -13,6 +13,11 @@ the file itself never holds the content, so nothing copied can rot. And if what 
 holding is later corrected, you're told on your next turn, unasked, with the diff.
 *Unknown now, not false* — a withdrawn claim collapses to uncertainty, not to its opposite.
 
+## The deck
+
+[`deck.html`](deck.html) — the presentation, self-contained (fonts and images inlined,
+no network). Download and open it in any browser; arrow keys navigate.
+
 ## Install
 
 ```bash
