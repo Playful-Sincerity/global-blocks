@@ -40,7 +40,7 @@ ship; the choice is structural, not a preference.
 
 ## When to reach for each
 
-**`block_write(content, confidence, title)`** — storing a claim someone else may act on.
+**`block_write(content, confidence, title)`** — storing a claim someone else may act on. Writing also enrols you for corrections to your own claim — symmetric with reading, recorded by the server itself since 0.7.1.
 `confidence` is what *you* assert, not what a reader should believe.
 
 **`block_read(block_id)`** — reading a claim with its provenance attached: origin,
