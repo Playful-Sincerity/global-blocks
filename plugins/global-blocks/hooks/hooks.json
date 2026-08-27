@@ -1,5 +1,5 @@
 {
-  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read transcludes a referenced block with its provenance and enrols you. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired — running there would look like coverage and do nothing.",
+  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read transcludes a referenced block with its provenance and enrols you. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired \u2014 running there would look like coverage and do nothing. And the write side: a claim-shaped line leaving as plain text into a chronicle/board/memory surface earns one quiet nudge toward block_write \u2014 once per file, three per session, never in source code.",
   "hooks": {
     "PostToolUse": [
       {
@@ -17,6 +17,15 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/record-read.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/nudge-block.py\""
           }
         ]
       },
