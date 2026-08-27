@@ -67,6 +67,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/check-stale.py\""
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/primer.py\""
+          }
+        ]
       }
     ]
   }

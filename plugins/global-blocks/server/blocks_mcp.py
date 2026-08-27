@@ -505,12 +505,20 @@ def block_verify(envelope: str, body: str, trust: float = 0.5) -> dict:
 
 
 @mcp.tool()
-def block_supersede(block_id: str, content: str, confidence: float | None = None) -> dict:
+def block_supersede(block_id: str, content: str, confidence: float | None = None,
+                    title: str | None = None) -> dict:
     """Write a new version, and return the notices owed to every stale holder.
 
     The right update for a holder is NOT that the old version is false — the
     origin withdrew its endorsement, it did not assert the negation. So their
     belief collapses into uncertainty and disbelief stays at zero.
+
+    `title` retitles the block in the same write. Found live on demo night: a
+    title that restates the claim ("Ducks fly ... on Tuesdays") sat over a
+    corrected body ("Wednesdays") — the correction landed in the content and
+    the label kept asserting the old world. Prefer topic titles ("duck-flight
+    -schedule") which don't go stale; when a title does carry the claim,
+    supersede it with the claim.
     """
     with _locked(block_id) as d:
         # Re-read INSIDE the lock. Reading n outside it is what made the update lossy.
@@ -520,6 +528,8 @@ def block_supersede(block_id: str, content: str, confidence: float | None = None
         old_hash = meta["hash"]
         meta.update({"n": n, "prev_hash": old_hash, "hash": _hash(content),
                      "confidence": confidence if confidence is not None else meta["confidence"]})
+        if title is not None:
+            meta["title"] = title
         _atomic_write(d / "meta.json", json.dumps(meta, indent=1))
         # One integer that says "somebody's copy just went stale." It lets the check run
         # on every tool call instead of only when a human types — the check itself costs
