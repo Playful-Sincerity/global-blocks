@@ -106,6 +106,11 @@ def hook(name: str, payload: dict, store: Path, *args) -> str:
     p = subprocess.run([sys.executable, str(HANDLERS / name), *args],
                        input=json.dumps(payload), capture_output=True, text=True,
                        env=dict(os.environ, GLOBAL_BLOCKS_HOME=str(store)))
+    # A handler that CRASHED must never read as a handler that chose to stay quiet.
+    # Silence is a real answer here, so an unreported failure would be indistinguishable
+    # from a correct null -- exactly the bug this project exists to catch.
+    if p.returncode != 0 or p.stderr.strip():
+        raise RuntimeError(f"{name} failed (exit {p.returncode}): {p.stderr.strip()[:400]}")
     out = p.stdout.strip()
     if not out:
         return ""
@@ -216,13 +221,29 @@ def main() -> int:
 
         # ── 7 ────────────────────────────────────────────────────────────────
         scene(7, "A holder in the SAME store is told, unasked")
-        out = hook("check-stale.py", {"session_id": holder_sess, "transcript_path": "",
-                                      "hook_event_name": "UserPromptSubmit"}, ORG_A)
-        if out:
-            good("the hook spoke without being called:")
-            show(out)
+        # Assert the simulation is honest BEFORE asserting anything about the result:
+        # if the holder and the origin collapsed into one session, a silent hook is
+        # correct behaviour and the scene would be measuring nothing.
+        _log = ORG_A / "readlog" / f"{holder_sess}.jsonl"
+        _rows = [json.loads(l) for l in _log.read_text().splitlines() if l.strip()] \
+                if _log.exists() else []
+        _mine = [r for r in _rows if r.get("blk") == a_block]
+        _writes = [r for r in _mine if r.get("via") != "block_read"]
+        if not _mine:
+            bad(f"SIMULATION BROKEN: no read-log entry for {holder_sess!r}; they never enrolled")
+        elif _writes:
+            bad(f"SIMULATION BROKEN: the holder's read-log contains a "
+                f"{_writes[0].get('via')!r} entry — the ORIGIN wrote under the holder's session. "
+                f"A silent hook would then be CORRECT (you are never told your own new version "
+                f"is stale), so this scene would be measuring nothing.")
         else:
-            bad("silent — the push did not reach a holder in its own store")
+            out = hook("check-stale.py", {"session_id": holder_sess, "transcript_path": "",
+                                          "hook_event_name": "UserPromptSubmit"}, ORG_A)
+            if out:
+                good("the hook spoke without being called:")
+                show(out)
+            else:
+                bad("silent — the push did not reach a holder in its own store")
 
         # ── 8 ────────────────────────────────────────────────────────────────
         scene(8, "A holder ACROSS the boundary is NOT told")

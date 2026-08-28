@@ -155,6 +155,75 @@ def _versions(block_id: str) -> list[Path]:
     return sorted((_dir(block_id) / "versions").glob("*.md"))
 
 
+HASH_SCHEME = "chain-v1"
+
+
+def _chain(version_hashes: list[str]) -> str:
+    """A real hash chain over a block's versions: each link binds the one before it.
+
+    Until 2026-08-28 `prev_hash` was a recorded POINTER, not a binding. `_hash` is plain
+    sha256(content), so v2's hash did not depend on v1's, and nothing in the production
+    read/verify path checked it — rewriting a superseded version file on disk went
+    undetected while the docs said "hash-chained". This is the binding:
+    chain_1 = sha256(h1), chain_n = sha256(chain_{n-1} + h_n).
+
+    Kept OFF `meta["hash"]` on purpose. That field means "sha256 of the head body, alone"
+    in four places — the portal envelope's `content_hash`, `block_verify`'s body check,
+    `holders.jsonl`, and `block_read`'s `hash_verified`. Binding prev into it, as the
+    evaluation memo proposed, would make every legitimate cross-boundary verify report
+    tampering on a body that is perfectly intact.
+    """
+    acc = ""
+    for h in version_hashes:
+        acc = hashlib.sha256((acc + h).encode("utf-8")).hexdigest()
+    return acc
+
+
+def _chain_of(d: Path, n: int) -> str:
+    """Recompute the chain from disk, over exactly the first `n` version files.
+
+    Taking `versions[:n]` against an `n` read BEFORE them is what makes this race-free
+    without holding the lock: `block_supersede` writes `v{n}.md` and only then replaces
+    meta.json, so a concurrent write can add a file past `n` but can never change one
+    inside it. Fewer files than `n` is a store that has lost a version — a failed check,
+    not a clean one, so it raises rather than hashing a short list.
+    """
+    files = sorted((d / "versions").glob("*.md"))[:n]
+    if len(files) != n:
+        raise ValueError(f"meta says {n} version(s), {len(files)} on disk")
+    return _chain([_hash(f.read_text(encoding="utf-8")) for f in files])
+
+
+def _chain_status(block_id: str) -> tuple[bool | None, str]:
+    """Has this block's history been rewritten? `(intact, why)`.
+
+    Three answers, and the third is the point — the same shape `check-stale` uses:
+      True  — checked against the recorded chain, matches.
+      False — checked, does NOT match. Something behind the head was edited.
+      None  — there is nothing to check against, or the check itself failed. Never
+              reported as clean.
+
+    `None` deliberately does not collapse belief. A block written before this scheme is
+    unverified, which is not the same as tampered, and collapsing every one of them would
+    say something false about all of them.
+    """
+    try:
+        d = _dir(block_id)
+        meta = json.loads((d / "meta.json").read_text())
+        if meta.get("hash_scheme") != HASH_SCHEME:
+            return None, ("this block predates chain binding and carries no recorded chain, "
+                          "so its history is unverified — which is not the same as intact")
+        if not meta.get("chain"):
+            return False, ("the block declares a chain scheme but records no chain, so the "
+                           "commitment it should be checked against is missing")
+        if _chain_of(d, meta["n"]) == meta["chain"]:
+            return True, f"version history matches the recorded chain across {meta['n']} version(s)"
+        return False, ("the version history no longer matches the recorded chain — one of "
+                       f"v1..v{meta['n']} has been modified since it was written")
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+        return None, f"the chain could not be checked ({type(e).__name__}: {e})"
+
+
 def _session() -> str:
     """Whose read-log this is.
 
@@ -233,11 +302,16 @@ def block_write(content: str, confidence: float = 0.8, title: str = "") -> dict:
     d = BLOCKS / block_id / "versions"
     d.mkdir(parents=True)
     (d / "v0001.md").write_text(content, encoding="utf-8")
+    first_hash = _hash(content)
     meta = {
-        "id": block_id, "n": 1, "hash": _hash(content),
+        "id": block_id, "n": 1, "hash": first_hash,
         "confidence": confidence, "title": title or content.strip()[:60],
         "origin": _origin(),
         "prev_hash": None, "authored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # Format-versioned so no old block is ever rewritten to migrate: one with no
+        # `hash_scheme` is checked under the old rules — which is to say not checked at
+        # all, and reported that way rather than as clean.
+        "hash_scheme": HASH_SCHEME, "chain": _chain([first_hash]),
     }
     (BLOCKS / block_id / "meta.json").write_text(json.dumps(meta, indent=1))
     # Writing enrols you, exactly as reading does. If someone else corrects your claim you
@@ -288,7 +362,28 @@ def block_read(block_id: str) -> dict:
                 "note": "this reference resolves to nothing — broken, not empty"}
     body = versions[-1].read_text(encoding="utf-8")
     got = _hash(body)
+    chain_ok, chain_why = _chain_status(block_id)
     _record(block_id, meta["n"], via="block_read")
+
+    # Collect the reasons, then act once — the discipline `block_verify` learned the hard
+    # way. This tool used to report `hash_verified: false` and, in the very next field,
+    # "compose it with your trust in them": an alarm and an invitation to believe it,
+    # side by side. Adding the chain as a second reason without this would have doubled
+    # that bug rather than fixed it.
+    unusable = []
+    if got != meta["hash"]:
+        unusable.append("the body on disk is not what this block's own metadata records")
+    if chain_ok is False:
+        unusable.append(chain_why)
+    if unusable:
+        note = (" and ".join(unusable).capitalize() +
+                ". Do not act on this content — unusable is unknown, not false.")
+    else:
+        note = ("this is what the origin asserts, not what you should believe — "
+                "compose it with your trust in them via block_verify")
+        if chain_ok is None:
+            note += f" ({chain_why})"
+
     return {
         "block_id": block_id, "version": meta["n"], "content": body,
         # The canonical citable form. `block_id` and `version` as separate JSON fields
@@ -298,8 +393,10 @@ def block_read(block_id: str) -> dict:
         "ref": f"{block_id}@v{meta['n']}",
         "origin": meta["origin"], "stated_confidence": meta["confidence"],
         "hash_verified": got == meta["hash"],
-        "note": ("this is what the origin asserts, not what you should believe — "
-                 "compose it with your trust in them via block_verify"),
+        # True / False / None, where None means no commitment exists to check against.
+        # Reporting that as clean is the exact bug this project exists to catch.
+        "chain_verified": chain_ok,
+        "note": note,
     }
 
 
@@ -472,11 +569,20 @@ def block_verify(envelope: str, body: str, trust: float = 0.5) -> dict:
     # A list rather than a third `if` on purpose. The bug was not the missing branch, it
     # was that adding a reason and collapsing on it were separate acts. Here a new reason
     # collapses because it is a reason.
+    # A third reason, added to the list rather than as a third `if` — the shape above.
+    # This one is only answerable with a local copy: the chain is a property of the
+    # origin's version history, not of the body in the receiver's hands.
+    chain_ok, chain_why = None, "no local copy of this block, so its history cannot be checked here"
+    if local is not None:
+        chain_ok, chain_why = _chain_status(str(portal.get("block_id", "")))
+
     unusable = []
     if not intact:
         unusable.append("the body is not what the origin asserted")
     if superseded is not None:
         unusable.append(f"the origin has moved on — now at v{superseded}")
+    if chain_ok is False:
+        unusable.append(chain_why)
     if unusable:
         op = {"belief": 0.0, "disbelief": 0.0, "uncertainty": 1.0,
               "base_rate": stated["base_rate"]}
@@ -498,6 +604,7 @@ def block_verify(envelope: str, body: str, trust: float = 0.5) -> dict:
         "detail": "hash matches origin" if intact
         else f"HASH MISMATCH — expected {content_hash[:16]}…, got {got[:16]}…",
         "superseded_to": superseded,
+        "chain_intact": chain_ok,
         "opinion": {k: round(v, 3) for k, v in op.items()},
         "projected": round(_projected(op), 3),
         "note": note,
@@ -530,6 +637,12 @@ def block_supersede(block_id: str, content: str, confidence: float | None = None
                      "confidence": confidence if confidence is not None else meta["confidence"]})
         if title is not None:
             meta["title"] = title
+        # Inside the lock, and after the version file is on disk, so the chain commits to
+        # exactly the history this write produced. A block minted before the scheme adopts
+        # it here — which commits to whatever its history is at THIS moment, and makes no
+        # claim about what may have happened to it before now.
+        meta["hash_scheme"] = HASH_SCHEME
+        meta["chain"] = _chain_of(d, n)
         _atomic_write(d / "meta.json", json.dumps(meta, indent=1))
         # One integer that says "somebody's copy just went stale." It lets the check run
         # on every tool call instead of only when a human types — the check itself costs

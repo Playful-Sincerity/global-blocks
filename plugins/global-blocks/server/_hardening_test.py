@@ -233,6 +233,57 @@ def main() -> int:
     check("so the author is in the audience when someone else corrects them",
           r["reached_locally_count"] >= 1, str(r.get("reached_locally")))
 
+    print("\n§K an OLD version file rewritten on disk is DETECTED")
+    # The gap named 2026-08-28: meta.json records prev_hash but _hash(content) never mixes
+    # it in, and nothing in the production read/verify path checks it — so silently
+    # overwriting a superseded version file went undetected while the docs said
+    # "hash-chained". Every check below was watched FAILING against the pre-fix code.
+    os.environ["GLOBAL_BLOCKS_SESSION"] = "chain-case"
+    c = B.block_write("the figure is 5.4%", confidence=0.9, title="chain-tamper subject")
+    cid = c["block_id"]
+    B.block_supersede(cid, "revised: the figure is 4.8%")
+    B.block_supersede(cid, "revised again: the figure is 4.2%")
+    head_body = "revised again: the figure is 4.2%"
+    env = B.block_portal(cid, "holder@elsewhere")["envelope"]
+
+    clean = B.block_verify(env, head_body, trust=0.9)
+    check("an untampered history verifies as intact", clean.get("chain_intact") is True,
+          f"chain_intact={clean.get('chain_intact')!r} — {str(clean)[:200]}")
+    check("and belief is still recommended when nothing is wrong",
+          clean["opinion"]["belief"] > 0.0, str(clean["opinion"]))
+
+    v2 = B._dir(cid) / "versions" / "v0002.md"
+    v2.write_text("revised: the figure is 9.9%", encoding="utf-8")   # history rewritten
+
+    r = B.block_verify(env, head_body, trust=0.9)
+    check("the head body still hashes intact — the tamper is behind it",
+          r["intact"] is True, str(r)[:160])
+    check("but the rewritten history is caught", r.get("chain_intact") is False,
+          f"chain_intact={r.get('chain_intact')!r} — nothing checks the chain")
+    check("and belief collapses rather than sitting beside the alarm",
+          r["opinion"]["belief"] == 0.0, str(r["opinion"]))
+    check("the note says what broke", "history" in r["note"].lower(), r["note"][:200])
+
+    rd = B.block_read(cid)
+    check("block_read reports the broken chain too", rd.get("chain_verified") is False,
+          f"chain_verified={rd.get('chain_verified')!r}")
+    check("and block_read stops recommending composition on a broken block",
+          "compose it with your trust" not in rd["note"], rd["note"][:200])
+
+    # A block written before the fix carries no commitment. Saying "clean" about it would
+    # be reporting clean from a check that never ran — the bug this project exists for.
+    legacy = B.block_write("written before chain binding", title="legacy subject")
+    lid = legacy["block_id"]
+    lm = B._dir(lid) / "meta.json"
+    m = json.loads(lm.read_text())
+    m.pop("hash_scheme", None)
+    m.pop("chain", None)
+    lm.write_text(json.dumps(m, indent=1))
+    lr = B.block_read(lid)
+    check("a pre-fix block reports 'not covered', never 'clean'",
+          lr.get("chain_verified") is None, f"chain_verified={lr.get('chain_verified')!r}")
+    check("and says so in words", "no recorded chain" in lr["note"].lower(), lr["note"][:200])
+
     print(f"\n{'=' * 66}\n{len(PASS)} passed, {len(FAIL)} failed")
     for f in FAIL:
         print(f"  FAILED: {f}")

@@ -79,6 +79,67 @@ def body_at(where: Path, version: int) -> str | None:
     return f.read_text(errors="replace") if f.exists() else None
 
 
+# Design note §7 Q4, Wisdom's call 2026-08-28: BUILD IT, gate the ship on the three-arm
+# harness. The harness measures whether portal-resolve beats push-notify on STALE's
+# dimension; if it does not, that is evidence against adding a SECOND propagation
+# mechanism on top of one not yet shown to work. So the code is written, exercised by the
+# suite, and reaches nobody's live session until the flag is flipped — which is one line.
+EDGE_WALK = os.environ.get("GLOBAL_BLOCKS_EDGE_WALK", "") not in ("", "0", "false", "no")
+
+
+def walk_edges(held: dict[str, int]) -> tuple[dict[str, int], dict[str, str]]:
+    """One hop out: what the blocks you hold cite, you are holding too.
+
+    The existing push reaches readers of the SAME claim. RippleEdits measures the other
+    gap — an edit leaves logically *dependent* facts stale. This closes a narrow slice of
+    it, and the narrowness is the honest part: not "go re-check C" (an adjudication
+    request, the operation STALE's numbers show failing) but the pinned reference inside C
+    retiring exactly the way any other held version does. Structural retirement, one hop.
+
+    ONE hop, never recursive. That bounds the cost to one body read per held block, and
+    makes cycles harmless by construction — A citing B citing A adds nothing on a second
+    pass because there is no second pass.
+
+    Wisdom, 2026-08-28 (§7 Q1): walk EVERY held body, not only bodies matching an edge
+    convention. A casual "see also blk_X" is a citation too, and a convention that
+    silently skips a real reference is the shape of bug this project keeps catching.
+
+    Returns (found, via) rather than mutating `held` — a separate dict merged once, so
+    nothing is added to the mapping being iterated.
+    """
+    found: dict[str, int] = {}
+    via: dict[str, str] = {}
+    for blk in list(held):
+        where = _resolve.find(blk)
+        if where is None:
+            continue
+        try:
+            n = json.loads((where / "meta.json").read_text()).get("n", 1)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue          # unreadable here is silence; the classifier below names it
+        body = body_at(where, n)
+        if not body:
+            continue
+        for m in REF.finditer(body):
+            cited = "blk_" + m.group(1)
+            if cited == blk:
+                continue      # a block citing itself is not an edge out of it
+            v = int(m.group(2)) if m.group(2) else 0
+            if v > found.get(cited, -1):
+                found[cited] = v
+                # `edge:<citing_id>`, matching the persisted convention's shape
+                # (`read:<file>` at transclude.py:188, the tool name at record-read.py:97)
+                # so one vocabulary describes how a block was reached, wherever it is read.
+                #
+                # NOT persisted, deliberately, and this is a departure from the design
+                # note's §5. Writing an edge-discovered id into the read-log would mark the
+                # session a holder of a block whose CONTENT it has never seen — the exact
+                # over-claim CLAUDE.md names under "a write is not a read". The walk reports
+                # what a session holds a reference to; it does not manufacture readership.
+                via[cited] = f"edge:{blk}"
+    return found, via
+
+
 def diff_lines(where: Path, was: int, now: int) -> list[str]:
     old, new = body_at(where, was), body_at(where, now)
     if old is None or new is None:
@@ -179,6 +240,18 @@ def main() -> int:
             held[blk] = max(held.get(blk, 0), v)
         unseen_by_tools = [b for b in from_txt if b not in from_log]
 
+        # One hop out, merged in ONCE — the walk builds its own dict so nothing is added
+        # to `held` while it is being read. Deliberately no new bucket: what the walk
+        # finds feeds the same moved/broken/foreign/unversioned classification and the
+        # same gate below, which is how a new case cannot be added and then forgotten.
+        via_edge: dict[str, str] = {}
+        if EDGE_WALK:
+            walked, walked_via = walk_edges(held)
+            for blk, v in walked.items():
+                if blk not in held or v > held[blk]:
+                    held[blk] = max(held.get(blk, 0), v)
+                    via_edge[blk] = walked_via[blk]
+
         moved, broken, foreign, unversioned = [], [], [], []
         for blk, seen in held.items():
             where = _resolve.find(blk)
@@ -225,6 +298,10 @@ def main() -> int:
     out.append("-- global-blocks · something you are holding moved --")
     for blk, title, was, now, origin, where in moved:
         out.append(f'   ↳ "{title}" — you have v{was}; {origin} is now at v{now}.')
+        if blk in via_edge:
+            # Retire the reference; never ask anyone to go adjudicate the citing block.
+            out.append(f"       one hop out, via={via_edge[blk]} — that block cites this "
+                       f"one, and what it claims about it rests on the version above.")
         for ln in diff_lines(where, was, now):
             mark = "removed" if ln.startswith("-") else "  added"
             out.append(f"       {mark}: {ln[1:].strip()[:88]}")

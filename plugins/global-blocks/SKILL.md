@@ -18,7 +18,11 @@ This gives you six tools that make that failure loud instead of silent.
 
 ## The shape
 
-- A **block** is content plus a version chain, addressed by id, hashed per version.
+- A **block** is content plus a version chain, addressed by id, hashed per version, and
+  **hash-chained** — each version's hash binds the one before it, so rewriting an old
+  version file on disk is detected rather than silently accepted (`chain-v1`, since
+  2026-08-28; blocks written before that date report *no recorded chain* rather than
+  clean, and adopt the chain at their next supersede).
 - The **id is an address, not a location.** One resolver decides where a block
   currently lives, so you can move it, rename its folder, and file it wherever you
   like — the id still finds it.
@@ -131,6 +135,16 @@ dozens of load-bearing claims and zero blocks. Adoption is a write-side problem.
 A hash mismatch does not distinguish transit corruption from tampering — and shouldn't;
 either way you must not act on the body. The trust values are yours to set; nothing here
 infers them.
+
+**What the hash chain does and does not prove.** It is tamper *evidence*, not tamper
+proofing. It catches an edit to a version file that does not also rewrite `meta.json` —
+which is the accident, the bad sync, the stray editor. Someone with write access to the
+store can recompute the chain, and nothing here signs anything: `origin` is a claimed
+string, not a cryptographic identity. The chain becomes adversarially meaningful only once
+its value has been published somewhere the origin does not control. It is also scoped to
+`v1..v{n}` where `n` comes from `meta.json`, so a version file appended *beyond* `n` sits
+outside the commitment. And `chain_verified` has three values, not two — `null` means no
+commitment exists to check against, which is reported in words and never as clean.
 
 **Delivery is local only.** The hooks reach sessions on this machine, computed from the
 read-log. They do **not** read `holders.jsonl`, so a holder you enrolled via
