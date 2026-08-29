@@ -7,11 +7,16 @@ claims as **blocks** — addressable, versioned, hash-chained — hands them acr
 boundaries as **portals** rather than copies, and pushes **corrections** to everyone
 who read the superseded version.
 
-The part you feel first: put a block id in any markdown file, and when an agent reads
-that file the claim arrives in context with who asserted it and how sure they were —
-the file itself never holds the content, so nothing copied can rot. And if what you're
-holding is later corrected, you're told on your next turn, unasked, with the diff.
-*Unknown now, not false* — a withdrawn claim collapses to uncertainty, not to its opposite.
+The part you feel first: put a block id in any file, and when an agent reads that file
+the claim arrives **filled in place** — the content replaces the id in the sentence that
+cites it, wrapped in who asserted it and how sure they were, with the id still visible.
+The file on disk never holds the content, so nothing copied can rot; and writing the file
+back contracts it to the bare id again, so an ordinary edit can't freeze a live claim into
+a dead copy. And if what you're holding is later corrected, you're told on your next turn,
+unasked, with the diff. *Unknown now, not false* — a withdrawn claim collapses to
+uncertainty, not to its opposite.
+
+Changes, and the failure each fix came from: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## The deck
 
@@ -45,6 +50,10 @@ $BLOCKS board --serve    # the live audience board: who holds what, who is owed
 - **A block's id is an address, not a location** — a block can move on disk and still be found.
 - **Reading enrols you.** Whoever holds the link *is* the correction audience — computed
   from what is actually loaded in a context, not from a subscription registry.
+- **Reading fills the portal; writing closes it.** Expand on read, contract on write —
+  git's `clean`/`smudge` pair, with the block store as the object database. The inverse is
+  exact and property-tested, and it fails *closed*: a write that can't be safely contracted
+  is blocked rather than allowed to bake a copy onto disk.
 - **Corruption is loud.** Every version is hashed; a mangled body fails to verify instead
   of passing quietly.
 - **Trust composes.** Belief in a claim discounts the origin's stated confidence through
@@ -57,6 +66,16 @@ $BLOCKS board --serve    # the live audience board: who holds what, who is owed
   holds the read-log. A portal holder in another org gets a notice returned to *you* to
   carry — there is no transport yet. This is the open problem, and we would rather name
   it than hide it.
+- **Pinned references are half-wired.** `blk_<id>@v3` in a file fills correctly on read —
+  you get *that* version's content, with `head=` telling you how far behind the file is —
+  but the `block_read` tool still rejects the same string as a malformed id. The reader
+  and the tool disagree about what a citable id is. Known, tracked, and the reason it is
+  listed here rather than quietly left for you to hit.
+- **Expansion is one level.** A block body that cites another block leaves that id bare.
+  No recursion, so no depth cap and no cycle guard to get wrong.
+- **A write through `Bash` bypasses the contraction hook.** `PreToolUse` fires on
+  `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, not on a heredoc. That path is caught at
+  commit time by the bundled leak check rather than at write time.
 - We do not claim novelty over transclusion itself — Ted Nelson designed it in the
   sixties and MediaWiki runs push-on-change transclusion at Wikipedia scale. The narrow
   claim: no subscription registry, audience computed from what is actually loaded.

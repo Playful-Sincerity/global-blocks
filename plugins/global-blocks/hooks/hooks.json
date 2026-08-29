@@ -1,13 +1,24 @@
 {
-  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read transcludes a referenced block with its provenance and enrols you. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired \u2014 running there would look like coverage and do nothing. And the write side: a claim-shaped line leaving as plain text into a chronicle/board/memory surface earns one quiet nudge toward block_write \u2014 once per file, three per session, never in source code.",
+  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read fills a referenced block IN PLACE, in content order, with the id still visible, and enrols you — hookSpecificOutput.updatedToolOutput replaces the tool result before the model sees it. PreToolUse on the four write tools is the exact inverse: it contracts the expanded form back to the bare id before anything reaches disk, and it fails CLOSED, because expansion failing open costs you a bare id while contraction failing open turns a live claim into a dead copy. Wired in that order deliberately — the inverse landed into an empty world before anything produced expanded text. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired \u2014 running there would look like coverage and do nothing. And the write side: a claim-shaped line leaving as plain text into a chronicle/board/memory surface earns one quiet nudge toward block_write \u2014 once per file, three per session, never in source code.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/contract-write.py\""
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Read",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/transclude.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/expand-read.py\""
           }
         ]
       },

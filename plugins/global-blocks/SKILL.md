@@ -69,9 +69,16 @@ No registry is consulted; the audience is computed from the read-log.
 Hooks ship with the plugin, and they are the difference between a mechanism and a
 suggestion:
 
-- **Reading a file that mentions a block transcludes it.** The ordinary `Read` tool is
-  enough — the block arrives wrapped in its origin, version and stated confidence, and
-  you are enrolled without calling anything.
+- **Reading a file that references a block fills it IN PLACE.** The ordinary `Read` tool
+  is enough — the block's current content replaces the id *where the id sits*, wrapped as
+  `BLK_<ID>[v=7 origin=… conf=… chain=…]{ …content… }BLK_<ID>`, so the claim arrives in
+  the sentence that cites it rather than as a footnote you have to re-associate. The id
+  stays visible, and you are enrolled without calling anything.
+- **Writing it back contracts it again.** Disk always holds the bare `blk_<ID>`; the fill
+  is a view. Any `Write`, `Edit`, `MultiEdit` or `NotebookEdit` is rewritten before it
+  lands, so an ordinary edit cannot freeze a live claim into a dead copy — the failure
+  that makes read-time expansion dangerous without an inverse. This half fails **closed**:
+  a write that cannot be safely contracted is blocked, not waved through.
 - **Using the block tools records the read** under the session id the harness reports.
 - **The staleness check runs on every prompt, every tool call, at the end of each turn,
   and on a resumed session.** Anything you hold that has since been superseded is
