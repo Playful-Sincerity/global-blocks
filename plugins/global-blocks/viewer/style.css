@@ -1,0 +1,150 @@
+/* global-blocks — the portal callout in VS Code's markdown preview.
+ *
+ * Every colour is a --vscode-* variable, so the callout takes the reader's ACTUAL theme
+ * rather than a light/dark palette invented here. VS Code's own markdown.css uses 56 of
+ * these, so this follows the host convention instead of competing with it — and it means
+ * a high-contrast or custom theme gets a correct callout for free.
+ *
+ * The one thing the design must carry: a reader has to be able to tell, without effort,
+ * where the author's words stop and a transcluded claim begins. Hence the rail, the tint
+ * and the provenance foot — not decoration, the whole point.
+ */
+
+.gb-portal {
+  display: block;
+  margin-block: 0.55em;
+  padding-block: 0.5em;
+  padding-inline: 0.85em;
+  border-inline-start: 3px solid var(--vscode-textLink-foreground, #3794ff);
+  border-start-end-radius: 4px;
+  border-end-end-radius: 4px;
+  background: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.1));
+  font-size: 0.94em;
+  line-height: 1.5;
+}
+
+.gb-head:not(:empty) {
+  display: block;
+  margin-block-end: 0.3em;
+}
+
+.gb-title {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  letter-spacing: 0.01em;
+}
+
+.gb-body {
+  display: block;
+  white-space: pre-wrap;          /* bodies carry code, JSON and hard line breaks */
+  overflow-wrap: anywhere;        /* a long token must not push the page sideways */
+  color: var(--vscode-foreground);
+}
+
+.gb-foot {
+  display: block;
+  margin-block-start: 0.45em;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.gb-sep { margin: 0 0.45em; opacity: 0.5; }
+
+.gb-origin { font-weight: 500; }
+
+/* "states 0.92" reads as the origin's assertion. "confidence unstated" must not look like
+ * a low number, so it is styled as an absence rather than a value. */
+.gb-conf-unstated { font-style: italic; opacity: 0.75; }
+
+.gb-id {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  opacity: 0.65;
+  overflow-wrap: anywhere;
+}
+
+.gb-ver { font-variant-numeric: tabular-nums; }
+
+/* Chained vs unchained is deliberately UNDER-dramatised: absence of a commitment is not
+ * evidence of tampering, and colouring it like a warning would say something false. */
+.gb-chain-ok   { color: var(--vscode-charts-green, #89d185); }
+.gb-chain-none { opacity: 0.6; }
+
+.gb-badge {
+  display: inline-block;
+  margin-inline-start: 0.5em;
+  padding-block: 0.05em;
+  padding-inline: 0.45em;
+  border-radius: 3px;
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: lowercase;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  vertical-align: baseline;
+}
+
+/* The two states that must never be quiet. A superseded pin is a reader looking at an old
+ * value on purpose; an unresolved id is a claim we do not have. Both are honest failures
+ * and both get the warning colour rather than a shrug. */
+.gb-is-stale { border-inline-start-color: var(--vscode-editorWarning-foreground, #cca700); }
+
+.gb-stale {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--vscode-editor-background);
+}
+
+.gb-unresolved {
+  display: inline;
+  padding-block: 0.05em;
+  padding-inline: 0.3em;
+  border-inline-start: none;
+  border-block-end: 1px dotted var(--vscode-editorWarning-foreground, #cca700);
+  background: none;
+}
+
+.gb-unresolved .gb-badge {
+  background: none;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  font-weight: 500;
+}
+
+@media print {
+  .gb-portal { break-inside: avoid; }
+}
+
+/* The fold. A long body would split the sentence that cites it, so it collapses to a lead
+ * with an expander — no <details> (flow content cannot live inside a markdown <p>) and no
+ * script. Nothing is truncated; the whole claim is always one click away. */
+.gb-body.gb-clamped {
+  max-block-size: 7.5em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+}
+
+.gb-portal:has(.gb-more input:checked) .gb-body.gb-clamped {
+  max-block-size: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.gb-more {
+  display: inline-block;
+  margin-block-start: 0.35em;
+  font-size: 0.85em;
+  color: var(--vscode-textLink-foreground, #3794ff);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gb-more input { position: absolute; opacity: 0; pointer-events: none; }
+.gb-more:hover { text-decoration: underline; }
+.gb-more input:focus-visible ~ span {
+  outline: 2px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 2px;
+}
+
+.gb-more-off { display: none; }
+.gb-portal:has(.gb-more input:checked) .gb-more-on  { display: none; }
+.gb-portal:has(.gb-more input:checked) .gb-more-off { display: inline; }

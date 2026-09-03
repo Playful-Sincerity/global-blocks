@@ -35,10 +35,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _resolve  # noqa: E402
+import portal_syntax  # noqa: E402
 
 HOME = _resolve.HOME
-# Same reference shape as check-stale/blockwatch — recognised identically everywhere.
-REF = re.compile(r"\bblk_[0-9A-HJKMNP-TV-Z]{26}\b")
+# Imported, not retyped — the third hand-copied twin of `PORTAL_RE`. Same reason as
+# check-stale: "recognised identically everywhere" is a property you get by sharing the
+# regex, not by three files agreeing today.
+REF = portal_syntax.PORTAL_RE
 MARKERS = re.compile(
     r"\b(?:PROVEN|VERIFIED|CONFIRMED|MEASURED)\b"
     r"|\b\d+(?:\.\d+)?%"

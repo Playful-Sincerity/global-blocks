@@ -26,10 +26,29 @@ expander against a 26-char contractor — and the contraction reported success w
 matching nothing. A no-op inverse is indistinguishable from an absent one. So the id
 length, the alphabet, the case convention and both regexes live here, once.
 
-CASE IS THE STATE MARKER. Lowercase `blk_` is the portal: the on-disk truth. Uppercase
-`BLK_` is the expanded view form, which must never exist on disk. One character carries
-the invariant, which makes a leak a one-line grep (`leak-check.py`) rather than a
-judgement call.
+CASE IS THE CONVENTION, THE BRACKET IS THE INVARIANT. Lowercase `blk_` is the portal —
+the on-disk truth; uppercase `BLK_` is the expanded view, which must never exist on disk.
+That convention is what makes a leak a one-line grep (`leak-check.py`) rather than a
+judgement call, and it is still what we *emit*.
+
+But it is not what we *detect on*, and the difference is the whole point. Case was the sole
+discriminator until 2026-08-28, and one bit of state that any `.lower()` in any pipeline can
+flip is a thin place to keep a safety property. Both failure directions were silent:
+
+  - an uppercased portal on disk stopped matching `PORTAL_RE`, so it never expanded, and
+    `LEAK_RE` did not flag it either (no bracket) — the portal just went quietly inert;
+  - a lowercased *view* slipped past `contract`'s `"BLK_" not in text` gate, which returned
+    unchanged and reported success — a dead copy on disk, with the leak grep blind to it.
+
+The second is this project's own oldest bug wearing a new coat: a no-op inverse is
+indistinguishable from an absent one, and that one is destructive.
+
+So the two halves are tolerant to different degrees, on purpose. CONTRACTION reads
+case-tolerantly (`_P`) because its failure writes a dead copy to disk. EXPANSION stays
+strictly lowercase because its failure is merely inert, and because `BLK_<id>` is how this
+project's own docs and tests TALK about the view form — a tolerant `PORTAL_RE` would fill
+in every piece of documentation that mentions the syntax. Emission is canonical in both
+directions regardless. Liberal where a miss costs data; strict where it costs a render.
 
 THE CLOSER REPEATS THE ID. `{...}` alone cannot be parsed back out of arbitrary content —
 block bodies hold code, JSON and braces. With the id in the closer, contraction is a
@@ -49,29 +68,97 @@ import re
 ID_CHARS = "0-9A-HJKMNP-TV-Z"
 ID_LEN = 26
 
+#: the prefix, spelled case-tolerant for DETECTION only. Emission stays canonical: lowercase
+#: on disk, uppercase in the view (see `contract`/`expand`). This is Postel's law, and the
+#: reason is that a case-sensitive detector fails SILENTLY in both directions — an uppercased
+#: portal stops expanding and nothing says so, and a lowercased view slips past contraction
+#: and lands on disk as a dead copy with the leak grep blind to it too.
+#:
+#: Written as explicit character classes rather than `re.IGNORECASE`, deliberately: the flag
+#: would also loosen ID_CHARS, so `blk_abcdef…` would start matching and lowercase hex would
+#: become a legal id. The prefix is what varies; the alphabet must not.
+_P = "[Bb][Ll][Kk]_"
+
 #: the on-disk form. `@vN` pins a version; without it the store serves the current one.
+#:
+#: STRICTLY LOWERCASE, and the asymmetry with the two below is the design, not an oversight.
+#: Tolerance is bought where failing costs you DATA and refused where it costs you a render:
+#: a missed contraction writes a dead copy to disk and cannot be undone, while a missed
+#: expansion leaves the address intact and merely fails to fill. So contraction reads
+#: liberally and expansion reads strictly.
+#:
+#: Strictness here also keeps prose honest. `BLK_<id>` appears in this project's own docs,
+#: tests and demo files as a way of TALKING about the view form; a case-tolerant PORTAL_RE
+#: would expand every one of those, so documentation about the syntax would start filling
+#: itself in. `_portal_test.py`'s fixed corpus asserts exactly this ("in prose, not an
+#: expanded form"), and a tolerant version of this line breaks law L1' against it.
 PORTAL_RE = re.compile(rf"\bblk_(?P<id>[{ID_CHARS}]{{{ID_LEN}}})(?:@v(?P<pin>\d+))?\b")
 
-#: the expanded view form. The trailing backreference is what makes this exact.
+#: the expanded view form. The trailing backreference is what makes this exact. The
+#: backreference binds the ID, not the prefix, so a span whose opener and closer were mangled
+#: differently still contracts.
 EXPANDED_RE = re.compile(
-    rf"BLK_(?P<id>[{ID_CHARS}]{{{ID_LEN}}})(?P<pin>@v\d+)?"
-    rf"\[[^\]]*\]\{{(?P<body>.*?)\}}BLK_(?P=id)",
+    rf"{_P}(?P<id>[{ID_CHARS}]{{{ID_LEN}}})(?P<pin>@v\d+)?"
+    rf"\[[^\]]*\]\{{(?P<body>.*?)\}}{_P}(?P=id)",
     re.DOTALL,
 )
 
-#: what `leak-check.py` greps for. The expanded form on disk is by definition a bug.
-LEAK_RE = re.compile(rf"BLK_[{ID_CHARS}]{{{ID_LEN}}}(?:@v\d+)?\[")
+#: what `leak-check.py` greps for. The expanded form on disk is by definition a bug, in any case.
+LEAK_RE = re.compile(rf"{_P}[{ID_CHARS}]{{{ID_LEN}}}(?:@v\d+)?\[")
 
-#: cheap substring gate before any regex, for the hot `PostToolUse:Read` path.
-MARKERS = ("blk_", "BLK_")
+#: cheap gate before the real regexes, for the hot `PostToolUse:Read` path. A compiled
+#: 4-character scan, not a `.lower()` copy of the whole buffer — the copy is what would
+#: actually cost on a large file.
+MARKER_RE = re.compile(_P)
 
 MAX_BODY_CHARS = 1200   # per block; the point is provenance, not a full paste
 MAX_FILE_CHARS = 8000   # per file, spent in document order
 
 
+# -- the grammar, exported for non-Python readers -------------------------------
+#
+# The markdown preview plugin renders the same portals in Node, and a second reader is
+# exactly the drift this module was written to prevent — the docstring's warning was about
+# an expander and a contractor, but a VIEWER that disagrees about what an id looks like
+# shows Wisdom something different from what the agent sees, which is its own quiet lie.
+#
+# So the primitives cross the language boundary as data instead of being retyped. The
+# patterns below are spelled in the subset Python and JavaScript share — POSITIONAL groups,
+# not `(?P<x>)`, which JS spells `(?<x>)` — so both engines compile the same string. The
+# canonical regexes above keep their named groups for readability; `_portal_test.py` holds
+# the two spellings to BEHAVIOURAL equivalence over the whole corpus, so this stays a
+# derivative and never becomes a second opinion.
+GRAMMAR = {
+    "id_chars": ID_CHARS,
+    "id_len": ID_LEN,
+    "prefix_disk": "blk_",
+    "prefix_view": "BLK_",
+    "prefix_any": _P,
+    "max_body_chars": MAX_BODY_CHARS,
+    "max_file_chars": MAX_FILE_CHARS,
+    # group 1 = id, group 2 = pin
+    "portal": rf"\bblk_([{ID_CHARS}]{{{ID_LEN}}})(?:@v(\d+))?\b",
+    # group 1 = id, group 2 = pin, group 3 = body
+    "expanded": rf"{_P}([{ID_CHARS}]{{{ID_LEN}}})(@v\d+)?\[[^\]]*\]\{{([\s\S]*?)\}}{_P}\1",
+    "leak": rf"{_P}[{ID_CHARS}]{{{ID_LEN}}}(?:@v\d+)?\[",
+}
+
+
 def has_marker(text: str) -> bool:
     """True if a regex is worth running at all. Read fires on every file."""
-    return any(m in text for m in MARKERS)
+    return MARKER_RE.search(text) is not None
+
+
+def has_expanded(text: str) -> bool:
+    """True if the text carries an expanded portal opener, in any case.
+
+    The gate for the contraction side, and deliberately tighter than `has_marker`: a file
+    that merely CITES a portal has the marker and needs no contraction, so gating writes on
+    the marker would pay for a full scan on the common case. `LEAK_RE` already encodes
+    exactly this shape — an opener with its bracket — so this is a name for it rather than
+    a fourth regex to keep in step.
+    """
+    return LEAK_RE.search(text) is not None
 
 
 # -- contraction - the safety-critical half ------------------------------------
@@ -83,7 +170,7 @@ def contract(text: str) -> tuple[str, int]:
     leaves the text alone. The caller is what must fail closed (see `contract-write.py`),
     because a write we cannot safely contract is a write that must not happen.
     """
-    if "BLK_" not in text:
+    if not has_expanded(text):
         return text, 0
 
     n = 0
@@ -118,9 +205,9 @@ def _meta(info: dict, pin: int | None) -> str:
         parts.append(f"head={int(info['version'])}")
     parts.append(f"origin={_clean(info.get('origin', '?'))}")
     parts.append(f"conf={conf}")
-    # 0.9.0's three-valued chain verdict. `none` means no commitment exists to check
-    # against - unverified, NOT tampered. The running plugin predates chain-v1, so this
-    # reads `none` everywhere until the hoist in spec section 8 step 2 lands.
+    # The three-valued chain verdict. `intact` was checked and holds; `none` means no
+    # chain commitment exists to check against - unverified, NOT tampered. `broken`
+    # never gets here: the resolver refuses a broken block before this is built.
     parts.append(f"chain={_clean(info.get('chain') or 'none')}")
     return " ".join(parts)
 
@@ -167,7 +254,7 @@ def expand(text: str, resolver, *, per_file: int = MAX_FILE_CHARS) -> tuple[str,
     """
     text, _ = contract(text)
     stats: dict = {"enrolled": [], "expanded": 0, "missing": [], "bare_over_budget": 0}
-    if "blk_" not in text:
+    if not has_marker(text):
         return text, stats
 
     spent = 0
@@ -196,3 +283,12 @@ def expand(text: str, resolver, *, per_file: int = MAX_FILE_CHARS) -> tuple[str,
         return f"BLK_{m.group('id')}{pin_s}[{_meta(info, pin)}]{{{body}}}BLK_{m.group('id')}"
 
     return PORTAL_RE.sub(_fill, text), stats
+
+
+if __name__ == "__main__":                                  # pragma: no cover
+    # `python3 portal_syntax.py > ../viewer/grammar.json` — the preview plugin's copy of
+    # the grammar, generated rather than typed. `_portal_test.py` §9b fails if the checked-in
+    # file drifts from this output, so the generation step cannot be silently skipped.
+    import json as _json
+    import sys as _sys
+    _sys.stdout.write(_json.dumps(GRAMMAR, indent=2) + "\n")

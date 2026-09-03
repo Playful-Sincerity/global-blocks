@@ -13,9 +13,12 @@ embedded in the same binary, and verified live on Claude Code 2.1.251 rather tha
 inferred. A shape mismatch fails SAFE: the harness uses the original output. Evidence:
 `verification/results/harness/inline-portal-hook-contract-2026-08-28.txt`.
 
-Three things happen, and the third is the one that matters:
+Four things happen, and the last is the one that matters:
 
   RESOLVE   the reference becomes content, in place, with the id still visible.
+  CHECK     the body is compared to the commitment recorded beside it before it
+            is served; a body that fails is refused, named, and not enrolled.
+            (Absent until 0.11.0 - named by a judge, 2026-09-02.)
   ATTRIBUTE the fill arrives wrapped in version, origin, stated confidence and chain
             status. A claim you cannot attribute is a claim you cannot discount.
   ENROL     the read is written to the read-log at its ACTUAL version, so a correction
@@ -44,6 +47,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _integrity  # noqa: E402
 import _resolve  # noqa: E402
 import portal_syntax  # noqa: E402
 
@@ -62,12 +66,24 @@ def record(session: str, block_id: str, version: int, via: str) -> None:
         f.write(json.dumps({"blk": block_id, "v": version, "via": via}) + "\n")
 
 
+#: Bodies this hook refused to serve, as (id, why) — named on the notice channel, left
+#: bare in the text, and NOT enrolled: nothing was shown, so there is nothing to correct.
+REFUSED: list[tuple[str, str]] = []
+
+
 def _resolver(block_id: str, pin: int | None) -> dict | None:
-    """id (+ optional pin) -> what the wrapper needs. None means it resolves to nothing.
+    """id (+ optional pin) -> what the wrapper needs. None means it resolves to nothing —
+    or to a body this hook refuses to serve.
 
     A pin beyond what the store holds is reported as unresolvable rather than quietly
     served the head version. Serving a different version than the one asked for is the
     failure this whole project is about; a bare id with a notice is the honest answer.
+
+    A body that does not match the commitment recorded beside it is refused the same way
+    and named on the notice channel. Until 0.11.0 nothing on this path compared the two:
+    the body was loaded, wrapped in the origin's name and stated confidence, and injected
+    — "29 hash references in the cross-boundary path, zero in the local one" (judge,
+    2026-09-02). The check is `_integrity.check`, the same code the server runs.
     """
     path = _resolve.find(block_id)
     if path is None:
@@ -75,28 +91,28 @@ def _resolver(block_id: str, pin: int | None) -> dict | None:
     try:
         meta = json.loads((path / "meta.json").read_text())
         head = int(meta.get("n", 1))
-        if pin is None:
-            versions = sorted((path / "versions").glob("*.md"))
-            if not versions:
-                return None
-            body = versions[-1].read_text(errors="replace")
-        else:
-            vf = path / "versions" / f"v{pin:04d}.md"
-            if not vf.is_file():
-                return None
-            body = vf.read_text(errors="replace")
+        # Read the version meta.json commits to, never `sorted(...)[-1]`: a supersede in
+        # flight writes v{n+1}.md before it replaces meta.json, and the old way would
+        # have served that file against the old hash and refused an intact block.
+        vf = path / "versions" / f"v{(head if pin is None else pin):04d}.md"
+        if not vf.is_file():
+            return None
+        body = vf.read_text(errors="replace")
+        body_ok, chain_ok, why = _integrity.check(path, meta, pin, body)
     except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if body_ok is False or chain_ok is False:
+        REFUSED.append((block_id, why))
         return None
     return {
         "version": head,
         "origin": meta.get("origin", "?"),
         "confidence": meta.get("confidence"),
-        # 0.9.0's three-valued chain verdict. The computation lives in
-        # `server/blocks_mcp.py` and the hook path has no access to it, so this is
-        # honestly `none` — no commitment exists to check against, which is UNVERIFIED,
-        # not tampered. Spec section 8 step 2 hoists it; until then do not read an
-        # all-`none` run as a defect.
-        "chain": meta.get("chain"),
+        # Three-valued: `intact` was checked and holds; `none` means no chain commitment
+        # exists (written before 0.9.0) — unverified, not tampered. The head body has
+        # still been checked against its own hash either way. `broken` never reaches the
+        # envelope: a broken block is refused above.
+        "chain": "intact" if chain_ok else None,
         "body": body,
     }
 
@@ -151,7 +167,14 @@ def main() -> int:
         return 0
 
     notes = []
+    refused = {blk for blk, _ in REFUSED}
+    for blk, why in REFUSED:
+        notes.append(f"   {blk} REFUSED, left bare: {why}. The origin's name and stated "
+                     f"confidence do not travel with a body they do not cover. Treat the "
+                     f"claim as unverified, not as absent, and not as false.")
     for blk in stats["missing"]:
+        if blk in refused:
+            continue
         notes.append(f"   {blk} resolves to nothing — a broken reference, not an empty one.")
     if stats["bare_over_budget"]:
         notes.append(f"   (+{stats['bare_over_budget']} reference(s) left bare — the "

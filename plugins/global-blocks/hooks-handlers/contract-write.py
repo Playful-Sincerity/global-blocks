@@ -70,7 +70,7 @@ def _contract_in_place(obj: dict) -> int:
     n = 0
     for key in FIELDS:
         val = obj.get(key)
-        if isinstance(val, str) and "BLK_" in val:
+        if isinstance(val, str) and portal_syntax.has_expanded(val):
             obj[key], k = portal_syntax.contract(val)
             n += k
     for edit in obj.get("edits") or ():          # MultiEdit
@@ -97,8 +97,11 @@ def main() -> int:
 
         # The cheap gate: nothing to do is by far the common case, and it must cost
         # nothing. Done on the serialised input so a nested `edits` array is covered
-        # without walking it first.
-        if "BLK_" not in json.dumps(tool_input, default=str):
+        # without walking it first. Case-tolerant since 2026-08-28 — a substring test for
+        # `BLK_` here was the real hole, upstream of the grammar: a lowercased view would
+        # return 0 from THIS line and never reach `contract` at all, however case-robust
+        # the regex behind it had become.
+        if not portal_syntax.has_expanded(json.dumps(tool_input, default=str)):
             return 0
 
         updated = json.loads(json.dumps(tool_input))   # never mutate what we were handed

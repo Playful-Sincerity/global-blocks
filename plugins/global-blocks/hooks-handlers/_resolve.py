@@ -36,7 +36,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import portal_syntax  # noqa: E402
 
 HOME = Path(os.environ.get("GLOBAL_BLOCKS_HOME", Path.home() / ".global-blocks"))
 BLOCKS = HOME / "blocks"
@@ -46,7 +50,12 @@ LOCATIONS = HOME / "locations.jsonl"
 # hex. Accepting the wider Crockford set keeps us compatible with ids minted by the
 # sibling blockwatch.py, which uses it. Either way the point is that an id cannot
 # contain `/`, `.` or a leading slash, so it can never be read as a path.
-ID_RE = re.compile(r"^blk_[0-9A-HJKMNP-TV-Z]{26}$")
+#
+# Built from `portal_syntax`, not retyped — this was the fourth hand-copy of the alphabet,
+# and the one guarding the id→path boundary, so a drift here is a security question and not
+# only a rendering one. `portal_syntax` imports nothing but `re`, so there is no cycle.
+ID_RE = re.compile(rf"^{portal_syntax.GRAMMAR['prefix_disk']}"
+                   rf"[{portal_syntax.ID_CHARS}]{{{portal_syntax.ID_LEN}}}$")
 
 
 class BadId(ValueError):

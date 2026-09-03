@@ -54,8 +54,11 @@ $BLOCKS board --serve    # the live audience board: who holds what, who is owed
   git's `clean`/`smudge` pair, with the block store as the object database. The inverse is
   exact and property-tested, and it fails *closed*: a write that can't be safely contracted
   is blocked rather than allowed to bake a copy onto disk.
-- **Corruption is loud.** Every version is hashed; a mangled body fails to verify instead
-  of passing quietly.
+- **Corruption is loud.** Every version is hashed and chained, and *both* paths check: a
+  body that does not match its recorded hash is refused by the read hook — left bare,
+  named, not enrolled — and fails `block_verify` across the boundary. (Until 0.11.0 only
+  the cross-boundary path checked. A judge found the local one on 2026-09-02, and the
+  README had claimed this line the whole time.)
 - **Trust composes.** Belief in a claim discounts the origin's stated confidence through
   your trust in the origin (Jøsang's discounting operator, verified against the published
   worked example in the 2006 paper).
@@ -76,6 +79,16 @@ $BLOCKS board --serve    # the live audience board: who holds what, who is owed
 - **A write through `Bash` bypasses the contraction hook.** `PreToolUse` fires on
   `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, not on a heredoc. That path is caught at
   commit time by the bundled leak check rather than at write time.
+- **Origin is a label, not a proof.** Nothing signs a block or an envelope, and
+  `block_supersede` has no authorization — anyone with write access to a store can supersede
+  anyone's block, and the new version is served under the *original* origin. `block_verify`
+  proves a body matches the hash its envelope carries, not that the envelope came from who
+  it names. Two judges reproduced this end to end. Signed, origin-bound envelopes are the
+  next real problem; they are not built.
+- **macOS and Linux only.** The server locks the store with `fcntl`; it does not run on
+  Windows.
+- **Blocks written before 0.9.0 have no chain.** Their head is checked against its hash on
+  every read; their history is reported as unverified, never as intact.
 - We do not claim novelty over transclusion itself — Ted Nelson designed it in the
   sixties and MediaWiki runs push-on-change transclusion at Wikipedia scale. The narrow
   claim: no subscription registry, audience computed from what is actually loaded.

@@ -57,7 +57,7 @@ def leaks(paths: list[Path]) -> list[tuple[Path, int, str]]:
             text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue                               # binary or unreadable: not our business
-        if "BLK_" not in text:                     # the cheap gate
+        if not portal_syntax.has_expanded(text):   # the cheap gate, case-tolerant
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if portal_syntax.LEAK_RE.search(line):
@@ -70,7 +70,20 @@ def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
 
     if args:
-        paths = [Path(a) for a in args]
+        # A directory argument used to reach `leaks()` intact, get skipped by the
+        # `is_file()` guard, and print "clean — 1 file(s)" — a pass reported over nothing
+        # scanned. Found by running it that way on 2026-08-28. Same family as the
+        # wrong-repo case below: the failure is not a wrong answer, it is a confident
+        # answer to a question nobody asked. Directories are walked, so the count printed
+        # is always the number of files actually read.
+        paths = []
+        for a in args:
+            p = Path(a)
+            if p.is_dir():
+                paths.extend(f for f in p.rglob("*")
+                             if f.is_file() and ".git/" not in str(f))
+            else:
+                paths.append(p)
         root = Path.cwd()
     else:
         # The repo under test is the one the CALLER is standing in — a pre-commit hook

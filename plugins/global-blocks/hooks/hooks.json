@@ -1,5 +1,5 @@
 {
-  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read fills a referenced block IN PLACE, in content order, with the id still visible, and enrols you — hookSpecificOutput.updatedToolOutput replaces the tool result before the model sees it. PreToolUse on the four write tools is the exact inverse: it contracts the expanded form back to the bare id before anything reaches disk, and it fails CLOSED, because expansion failing open costs you a bare id while contraction failing open turns a live claim into a dead copy. Wired in that order deliberately — the inverse landed into an empty world before anything produced expanded text. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired \u2014 running there would look like coverage and do nothing. And the write side: a claim-shaped line leaving as plain text into a chronicle/board/memory surface earns one quiet nudge toward block_write \u2014 once per file, three per session, never in source code.",
+  "description": "Correction as a push, on every event that can carry it. PostToolUse:Read fills a referenced block IN PLACE, in content order, with the id still visible, and enrols you \u2014 hookSpecificOutput.updatedToolOutput replaces the tool result before the model sees it. PreToolUse on the four write tools is the exact inverse: it contracts the expanded form back to the bare id before anything reaches disk, and it fails CLOSED, because expansion failing open costs you a bare id while contraction failing open turns a live claim into a dead copy. Wired in that order deliberately \u2014 the inverse landed into an empty world before anything produced expanded text. PostToolUse on the block tools records the read under the session id the server itself cannot see. Then the staleness check runs on UserPromptSubmit (full), on every tool call and at end of turn (epoch-gated, so a session working autonomously still hears about a correction), and on a resumed session that woke up holding blocks. Events that cannot inject context are deliberately not wired \u2014 running there would look like coverage and do nothing. And the write side, rebuilt 2026-09-01 after measurement: the PostToolUse advisory nudge scored ~0 conversions across ~17 fires, so it is REPLACED by pre-block-gate.py on PreToolUse. It DENIES one claim-heavy write per session into a chronicle/board/memory surface \u2014 never source code \u2014 and re-issuing that exact write verbatim passes, so it is a speed bump and can never become a wall. It denies rather than rewriting because a block needs a title, a confidence and a perishability judgement no hook can make, and it fails OPEN (the inverse of contract-write.py, which guards data and must fail closed).",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,15 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/contract-write.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/pre-block-gate.py\""
           }
         ]
       }
@@ -28,15 +37,6 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/record-read.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/nudge-block.py\""
           }
         ]
       },

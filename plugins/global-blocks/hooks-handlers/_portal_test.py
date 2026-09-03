@@ -12,6 +12,7 @@ distinction is the whole point: a test derived from the code agrees with the cod
     L2  expand(expand(t))   == expand(t)      a second read must not nest wrappers
     L3  contract(contract(t)) == contract(t)  a double-fired write hook is harmless
     L4  expand(t) == t                        when t cites nothing
+    L5  contract(mangle_case(expand(t)))      a case-mangled view still contracts
 
 Two things make this more than a green tick.
 
@@ -21,10 +22,11 @@ portals, table rows, ids one character short and one character long, and metadat
 carrying `]` — the character that would end the bracket segment early and make
 contraction silently skip a portal.
 
-**And the suite is watched going red.** §10 runs the whole property set against four
+**And the suite is watched going red.** §10 runs the whole property set against five
 deliberately broken copies of the module — the 25-vs-26 length disagreement that actually
-happened on 2026-08-28, a closer that does not repeat the id, unsanitised metadata, and an
-expander that skips its canonicalising contract. Each mutant MUST be killed. A property
+happened on 2026-08-28, a closer that does not repeat the id, unsanitised metadata, an
+expander that skips its canonicalising contract, and a case-SENSITIVE detector (which is
+what 0.10.0 shipped, and what L5 exists to catch). Each mutant MUST be killed. A property
 suite nobody has seen fail is decoration, and this project's own history has a negative
 control that went green twice because the bad input never reached the assertion.
 
@@ -33,6 +35,7 @@ Run: `uv run _portal_test.py`   (or `python3 _portal_test.py`)
 from __future__ import annotations
 
 import random
+import re
 import sys
 import types
 from pathlib import Path
@@ -135,13 +138,28 @@ def _canonical(t: str) -> str:
 
 # -- the laws, over a module (so mutants can be driven through the same suite) ---
 
+def _mangle_case(t: str) -> list[str]:
+    """The view form as a hostile channel would hand it back.
+
+    Not hypothetical: `.lower()` lives in slugifiers, search normalisers, some DB
+    collations, and in any model asked to retype a passage. Each variant is applied to the
+    PREFIX ONLY — the id keeps its Crockford case, because a channel that destroyed the id
+    itself has destroyed the address and there is nothing left to recover.
+    """
+    return [
+        t.replace("BLK_", "blk_"),         # fully lowercased - the dangerous one
+        t.replace("BLK_", "Blk_"),         # sentence-cased, as an editor would
+        t.replace("BLK_", "bLK_", 1),      # one end only: opener mangled, closer not
+    ]
+
+
 def _laws(mod, docs: list[str]) -> list[str]:
     """Returns a list of violation descriptions. Empty means all laws held."""
     bad: list[str] = []
     for t in docs:
         canon = mod.contract(t)[0]
         e, _ = mod.expand(t, RESOLVE)
-        c, _ = mod.contract(e)
+        c, n_canon = mod.contract(e)
         if c != canon:
             bad.append(f"L1' contract(expand(t)) != contract(t)\n  t={t!r}\n  got={c!r}")
             continue
@@ -153,6 +171,35 @@ def _laws(mod, docs: list[str]) -> list[str]:
         cc, _ = mod.contract(c)
         if cc != c:
             bad.append(f"L3 contract(contract(t)) != contract(t)\n  t={t!r}")
+
+        # L5 - contraction survives a case-mangled view, and lands canonical.
+        #
+        # The law the original three could not see, because the generator only ever
+        # produced canonical case. Its absence was not a gap in coverage but a gap in the
+        # THREAT MODEL: every document was well-formed, so the suite was asking whether the
+        # inverse was correct and never whether it could be BYPASSED. Both guards went
+        # blind together on a lowercased view - `contract`'s substring gate returned
+        # unchanged reporting success, and LEAK_RE missed it downstream.
+        # Stated as two crisp properties rather than text equality against `c`, and the
+        # reason is a real false positive this caught on its first run: mangling the whole
+        # document also lowercases `BLK_<id>` PROSE MENTIONS, promoting inert text into
+        # live bare portals. That genuinely changes the output, so equality flagged 1693
+        # documents where nothing was wrong. What actually protects disk is narrower —
+        # every span still gets restored, and nothing expanded survives.
+        if n_canon:                                   # only where a portal actually filled
+            for m in _mangle_case(e):
+                mc, n = mod.contract(m)
+                if n != n_canon:
+                    bad.append(f"L5 contraction restored {n} of {n_canon} on a mangled "
+                               f"view\n  mangled={m[:300]!r}")
+                    break
+                if mod.LEAK_RE.search(mc):
+                    bad.append(f"L5 an expanded form SURVIVED contraction\n"
+                               f"  mangled={m[:300]!r}\n  got={mc[:300]!r}")
+                    break
+                if mod.LEAK_RE.search(m) is None:
+                    bad.append(f"L5 leak grep blind to a mangled view\n  mangled={m[:300]!r}")
+                    break
     return bad
 
 
@@ -190,9 +237,9 @@ DOCS = _corpus()
 
 # -- 1..4 the laws --------------------------------------------------------------
 
-print("\n1-4. git's three laws + no-op, over 4014 documents")
+print(f"\n1-5. git's three laws + no-op + case-mangling, over {len(DOCS)} documents")
 _v = _laws(ps, DOCS)
-check("L1/L1'/L2/L3 hold across the corpus", not _v, "\n       ".join(_v[:3]))
+check("L1/L1'/L2/L3/L5 hold across the corpus", not _v, "\n       ".join(_v[:3]))
 
 _np = ["no portal here", "", "a { b } | c |", "BLK_ not an id", "blk_short"]
 check("L4 expand is a no-op with nothing to resolve",
@@ -260,7 +307,7 @@ check("truncated body still contracts", ps.contract(_tr)[0] == f"blk_{'K' * ps.I
 
 # -- 10. MUTATION - the suite must be watched going red -------------------------
 #
-# Four mutants, each a real failure this design could have shipped. If a mutant
+# Five mutants, each a real failure this design could have shipped. If a mutant
 # survives, the property suite is not testing what it claims to test.
 
 #
@@ -270,7 +317,60 @@ check("truncated body still contracts", ps.contract(_tr)[0] == f"blk_{'K' * ps.I
 # the mutant's bug. It only shows up against a correct implementation, on nested input.
 # That is the same shape as this project's negative control that went green twice.
 
-print("\n10. mutation - four broken copies, each must be KILLED")
+# -- 9b. the exported grammar is a derivative, not a second opinion -------------
+#
+# `GRAMMAR` exists so the markdown preview plugin can render portals in Node without
+# retyping the alphabet. That makes it a SECOND READER, which is the drift this module was
+# written to prevent — so it is held to behavioural equivalence over the same corpus, not
+# merely eyeballed. String equality would not do: the canonical regexes use named groups
+# and the exported ones use positional groups, so they are different STRINGS that must be
+# the same LANGUAGE.
+
+print("\n9b. the exported grammar agrees with the canonical regexes")
+_gp = re.compile(ps.GRAMMAR["portal"])
+_ge = re.compile(ps.GRAMMAR["expanded"])
+_gl = re.compile(ps.GRAMMAR["leak"])
+
+_mismatch = None
+for _t in DOCS:
+    _e, _ = ps.expand(_t, RESOLVE)
+    for _probe in (_t, _e):
+        if [(m.start(), m.group(1), m.group(2)) for m in _gp.finditer(_probe)] != \
+           [(m.start(), m.group("id"), m.group("pin")) for m in ps.PORTAL_RE.finditer(_probe)]:
+            _mismatch = f"portal disagrees on {_probe[:90]!r}"
+            break
+        if [(m.start(), m.group(1)) for m in _ge.finditer(_probe)] != \
+           [(m.start(), m.group("id")) for m in ps.EXPANDED_RE.finditer(_probe)]:
+            _mismatch = f"expanded disagrees on {_probe[:90]!r}"
+            break
+        if bool(_gl.search(_probe)) != bool(ps.LEAK_RE.search(_probe)):
+            _mismatch = f"leak disagrees on {_probe[:90]!r}"
+            break
+    if _mismatch:
+        break
+
+check("exported patterns match the canonical ones over the corpus", _mismatch is None,
+      _mismatch or "")
+check("exported primitives match the module", (
+    ps.GRAMMAR["id_chars"] == ps.ID_CHARS
+    and ps.GRAMMAR["id_len"] == ps.ID_LEN
+    and ps.GRAMMAR["max_body_chars"] == ps.MAX_BODY_CHARS
+    and ps.GRAMMAR["max_file_chars"] == ps.MAX_FILE_CHARS))
+
+# The generated JSON the plugin actually loads must match what the module says TODAY.
+# Without this, the export is a fourth copy with extra steps — the exact failure mode the
+# whole exercise is meant to close.
+_gen = HERE.parent / "viewer" / "grammar.json"
+if _gen.exists():
+    import json as _json
+    check("viewer/grammar.json is in step with the module",
+          _json.loads(_gen.read_text()) == ps.GRAMMAR,
+          "regenerate: python3 portal_syntax.py > ../viewer/grammar.json")
+else:
+    check("viewer/grammar.json is in step with the module", True, "(not generated yet)")
+
+
+print("\n10. mutation - five broken copies, each must be KILLED")
 SRC = (HERE / "portal_syntax.py").read_text()
 
 
@@ -285,13 +385,20 @@ def _differs(mod, docs: list[str]) -> str | None:
 
 MUTANTS = {
     "M1 expander/contractor disagree on id length (the 2026-08-28 bug)":
-        (r"BLK_(?P<id>[{ID_CHARS}]{{{ID_LEN}}})", r"BLK_(?P<id>[{ID_CHARS}]{25})"),
+        (r"{_P}(?P<id>[{ID_CHARS}]{{{ID_LEN}}})", r"{_P}(?P<id>[{ID_CHARS}]{25})"),
     "M2 closer does not repeat the id":
-        (r"\}}BLK_(?P=id)", r"\}}BLK_[{ID_CHARS}]{{{ID_LEN}}}"),
+        (r"\}}{_P}(?P=id)", r"\}}{_P}[{ID_CHARS}]{{{ID_LEN}}}"),
     "M3 metadata not sanitised":
         (r'return re.sub(r"[\[\]\s]+", "-", str(v)).strip("-") or "?"', "return str(v)"),
     "M4 expand does not canonicalise first":
         ("    text, _ = contract(text)\n", "    text = text\n"),
+    # M5 guards the 2026-08-28 hardening itself. Reverting `_P` to a fixed-case literal is
+    # exactly the shipped 0.10.0 behaviour, and it must not survive: a case-sensitive
+    # detector lets a lowercased view through `contract` unchanged, which is a dead copy on
+    # disk reported as success. Killed by L5 and by nothing else — which is the argument
+    # for L5 existing.
+    "M5 detection is case-sensitive again (the shipped 0.10.0 hole)":
+        ('_P = "[Bb][Ll][Kk]_"', '_P = "BLK_"'),
 }
 
 for name, (old, new) in MUTANTS.items():

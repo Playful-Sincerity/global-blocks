@@ -35,17 +35,19 @@ import difflib
 import hashlib
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _resolve  # noqa: E402
+import portal_syntax  # noqa: E402
 
 HOME = _resolve.HOME
-# Crockford base32 alphabet (no I/L/O/U), optional @vN marker — matches the sibling's
-# blockwatch.py so a reference is recognised identically wherever it is seen.
-REF = re.compile(r"\bblk_([0-9A-HJKMNP-TV-Z]{26})(?:@v(\d+))?\b")
+# The grammar is imported, not retyped. This was a hand-copied twin of `PORTAL_RE` whose
+# comment already stated the intent — "recognised identically wherever it is seen" — and
+# achieved it by copy-paste, which is the drift `portal_syntax` exists to prevent. Its
+# named groups are also numbered 1 (id) and 2 (pin), so the finditer callers are unchanged.
+REF = portal_syntax.PORTAL_RE
 MAX_DIFF_LINES = 6
 
 

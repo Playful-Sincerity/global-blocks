@@ -143,6 +143,17 @@ A hash mismatch does not distinguish transit corruption from tampering — and s
 either way you must not act on the body. The trust values are yours to set; nothing here
 infers them.
 
+**What the local read path checks — and did not, until 0.11.0.** Before 0.11.0 the read
+hook loaded a body and injected it under the origin's name and stated confidence without
+comparing it to the hash recorded beside it; only the cross-boundary `block_verify` path
+checked anything. A hackathon judge found it on 2026-09-02: *"29 hash references in the
+cross-boundary path, zero in the local one."* Now every fill is checked by the same code
+the server runs (`_integrity.py`): the head body against `meta["hash"]` (every block has
+one), a pinned version against the chain, and v(n-1) of a pre-chain block against
+`prev_hash`. A body that fails is **refused** — left as the bare id, named on the notice
+channel, and not enrolled, because nothing was shown. `chain=none` in the envelope means the
+history is unverified; the head body was still checked.
+
 **What the hash chain does and does not prove.** It is tamper *evidence*, not tamper
 proofing. It catches an edit to a version file that does not also rewrite `meta.json` —
 which is the accident, the bad sync, the stray editor. Someone with write access to the
@@ -152,6 +163,24 @@ its value has been published somewhere the origin does not control. It is also s
 `v1..v{n}` where `n` comes from `meta.json`, so a version file appended *beyond* `n` sits
 outside the commitment. And `chain_verified` has three values, not two — `null` means no
 commitment exists to check against, which is reported in words and never as clean.
+
+**Origin is a label, not a proof — and supersede is unauthenticated.** `origin` is a
+string the writer's environment supplies; nothing signs it. `block_supersede` performs no
+authorization: anyone with write access to the store can supersede anyone's block, and the
+new version is served under the *original* origin label at whatever confidence the
+superseder states. `block_verify` proves a body matches the hash an envelope carries; it
+cannot prove the envelope came from who it names, so a fabricated envelope verifies. Two
+judges reproduced this end to end on 2026-09-02 (Mallory supersedes Alice's block; a third
+agent's read hook injects Mallory's text as `alice@orgA` at 0.95). Origin-bound signatures
+and an authenticated supersede are the next real problem. They are not built, and until they
+are, a block proves *what* was stored, not *who* stored it.
+
+**macOS and Linux only.** The server locks the store with `fcntl`, which does not exist on
+Windows. Windows is not a supported platform; it fails at import, not quietly.
+
+**Blocks written before 0.9.0 carry no chain.** Their head is checked against its hash on
+every read; their history is unverified and reported as `chain=none` / `chain_verified:
+null` — never as intact. They adopt the chain at their next supersede.
 
 **Delivery is local only.** The hooks reach sessions on this machine, computed from the
 read-log. They do **not** read `holders.jsonl`, so a holder you enrolled via

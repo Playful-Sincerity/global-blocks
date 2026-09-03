@@ -1,0 +1,35 @@
+{
+  "name": "global-blocks-preview",
+  "displayName": "global-blocks — inline portals",
+  "description": "Fills blk_ portals in place in the markdown preview, with provenance. The file on disk still holds only the id.",
+  "version": "0.1.0",
+  "publisher": "playful-sincerity",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "Reads only the block store in your home directory, never workspace files, and never writes."
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Portals render as unresolved without local filesystem access."
+    }
+  },
+  "contributes": {
+    "markdown.markdownItPlugins": true,
+    "markdown.previewStyles": [
+      "./style.css"
+    ]
+  },
+  "devDependencies": {
+    "markdown-it": "^15.0.1"
+  }
+}

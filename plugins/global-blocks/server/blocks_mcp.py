@@ -44,6 +44,7 @@ from mcp.server import MCPServer
 # independently — here and twice in check-stale.py — and they disagreed the moment a
 # block moved, which is how a live block came to be reported as gone.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks-handlers"))
+import _integrity  # noqa: E402
 import _resolve  # noqa: E402
 
 HOME = Path(os.environ.get("GLOBAL_BLOCKS_HOME", Path.home() / ".global-blocks"))
@@ -63,8 +64,10 @@ mcp = MCPServer(
 
 # ── substrate ────────────────────────────────────────────────────────────────
 
-def _hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+# The integrity substrate lives in `hooks-handlers/_integrity.py` since 0.11.0, so the
+# read hook checks the same commitments this server does. The names below stay: the
+# rest of this file and the test suites call them.
+_hash = _integrity.hash_of
 
 
 def sanitize(text: str) -> str:
@@ -155,73 +158,21 @@ def _versions(block_id: str) -> list[Path]:
     return sorted((_dir(block_id) / "versions").glob("*.md"))
 
 
-HASH_SCHEME = "chain-v1"
-
-
-def _chain(version_hashes: list[str]) -> str:
-    """A real hash chain over a block's versions: each link binds the one before it.
-
-    Until 2026-08-28 `prev_hash` was a recorded POINTER, not a binding. `_hash` is plain
-    sha256(content), so v2's hash did not depend on v1's, and nothing in the production
-    read/verify path checked it — rewriting a superseded version file on disk went
-    undetected while the docs said "hash-chained". This is the binding:
-    chain_1 = sha256(h1), chain_n = sha256(chain_{n-1} + h_n).
-
-    Kept OFF `meta["hash"]` on purpose. That field means "sha256 of the head body, alone"
-    in four places — the portal envelope's `content_hash`, `block_verify`'s body check,
-    `holders.jsonl`, and `block_read`'s `hash_verified`. Binding prev into it, as the
-    evaluation memo proposed, would make every legitimate cross-boundary verify report
-    tampering on a body that is perfectly intact.
-    """
-    acc = ""
-    for h in version_hashes:
-        acc = hashlib.sha256((acc + h).encode("utf-8")).hexdigest()
-    return acc
-
-
-def _chain_of(d: Path, n: int) -> str:
-    """Recompute the chain from disk, over exactly the first `n` version files.
-
-    Taking `versions[:n]` against an `n` read BEFORE them is what makes this race-free
-    without holding the lock: `block_supersede` writes `v{n}.md` and only then replaces
-    meta.json, so a concurrent write can add a file past `n` but can never change one
-    inside it. Fewer files than `n` is a store that has lost a version — a failed check,
-    not a clean one, so it raises rather than hashing a short list.
-    """
-    files = sorted((d / "versions").glob("*.md"))[:n]
-    if len(files) != n:
-        raise ValueError(f"meta says {n} version(s), {len(files)} on disk")
-    return _chain([_hash(f.read_text(encoding="utf-8")) for f in files])
+HASH_SCHEME = _integrity.HASH_SCHEME
+_chain = _integrity.chain
+_chain_of = _integrity.chain_of
 
 
 def _chain_status(block_id: str) -> tuple[bool | None, str]:
-    """Has this block's history been rewritten? `(intact, why)`.
-
-    Three answers, and the third is the point — the same shape `check-stale` uses:
-      True  — checked against the recorded chain, matches.
-      False — checked, does NOT match. Something behind the head was edited.
-      None  — there is nothing to check against, or the check itself failed. Never
-              reported as clean.
-
-    `None` deliberately does not collapse belief. A block written before this scheme is
-    unverified, which is not the same as tampered, and collapsing every one of them would
-    say something false about all of them.
-    """
+    """Has this block's history been rewritten? `(intact, why)` — `_integrity.chain_status`,
+    resolved by id. An id that resolves to nothing is a check that could not run, not a
+    clean one."""
     try:
         d = _dir(block_id)
         meta = json.loads((d / "meta.json").read_text())
-        if meta.get("hash_scheme") != HASH_SCHEME:
-            return None, ("this block predates chain binding and carries no recorded chain, "
-                          "so its history is unverified — which is not the same as intact")
-        if not meta.get("chain"):
-            return False, ("the block declares a chain scheme but records no chain, so the "
-                           "commitment it should be checked against is missing")
-        if _chain_of(d, meta["n"]) == meta["chain"]:
-            return True, f"version history matches the recorded chain across {meta['n']} version(s)"
-        return False, ("the version history no longer matches the recorded chain — one of "
-                       f"v1..v{meta['n']} has been modified since it was written")
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
         return None, f"the chain could not be checked ({type(e).__name__}: {e})"
+    return _integrity.chain_status(d, meta)
 
 
 def _session() -> str:

@@ -1,0 +1,12 @@
+{
+  "id_chars": "0-9A-HJKMNP-TV-Z",
+  "id_len": 26,
+  "prefix_disk": "blk_",
+  "prefix_view": "BLK_",
+  "prefix_any": "[Bb][Ll][Kk]_",
+  "max_body_chars": 1200,
+  "max_file_chars": 8000,
+  "portal": "\\bblk_([0-9A-HJKMNP-TV-Z]{26})(?:@v(\\d+))?\\b",
+  "expanded": "[Bb][Ll][Kk]_([0-9A-HJKMNP-TV-Z]{26})(@v\\d+)?\\[[^\\]]*\\]\\{([\\s\\S]*?)\\}[Bb][Ll][Kk]_\\1",
+  "leak": "[Bb][Ll][Kk]_[0-9A-HJKMNP-TV-Z]{26}(?:@v\\d+)?\\["
+}
